@@ -1,0 +1,35 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## NuGet
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nupkg
+
+## IDE
+.vs/
+.vscode/
+*.swp
+*~
+
+## User secrets
+secrets.json
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+
+## Claude Code
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.mcp.*
+
+appsettings.local.json
