@@ -1,4 +1,5 @@
 using Application.DTOs.Auth;
+using Domain.Abstractions;
 using Domain.Abstractions.Repositories;
 using Application.Abstractions.Services;
 using Domain.Errors;
@@ -7,21 +8,21 @@ using ErrorOr;
 
 namespace Application.Services;
 
-public sealed class AuthService(IUserRepository userRepository) : IAuthService
+public sealed class AuthService(IUserRepository userRepository, IUnitOfWork unitOfWork) : IAuthService
 {
-    public async Task<ErrorOr<UserResponse>> SyncUserAsync(string? externalId, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<UserResponse>> Sync(string? externalId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(externalId))
             return AuthErrors.MissingExternalId;
 
-        var user = await userRepository.GetByExternalIdAsync(externalId, cancellationToken);
+        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
         if (user is null)
             return AuthErrors.UserNotFound;
 
         return Map(user);
     }
 
-    public async Task<ErrorOr<UserResponse>> RegisterUserAsync(
+    public async Task<ErrorOr<UserResponse>> Register(
         string? externalId,
         string? email,
         string name,
@@ -34,11 +35,11 @@ public sealed class AuthService(IUserRepository userRepository) : IAuthService
         if (string.IsNullOrEmpty(email))
             return AuthErrors.MissingEmail;
 
-        var existingUser = await userRepository.GetByExternalIdAsync(externalId, cancellationToken);
+        var existingUser = await userRepository.GetByExternalId(externalId, cancellationToken);
         if (existingUser is not null)
             return AuthErrors.UserAlreadyExists;
 
-        var emailTaken = await userRepository.ExistsByEmailAsync(email, cancellationToken);
+        var emailTaken = await userRepository.ExistsByEmail(email, cancellationToken);
         if (emailTaken)
             return AuthErrors.EmailAlreadyInUse;
 
@@ -50,7 +51,8 @@ public sealed class AuthService(IUserRepository userRepository) : IAuthService
             Dob = dateOfBirth
         };
 
-        await userRepository.AddAsync(user, cancellationToken);
+        await userRepository.Add(user, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Map(user);
     }

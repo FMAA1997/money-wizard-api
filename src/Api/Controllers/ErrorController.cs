@@ -53,7 +53,7 @@ public class ErrorController : ControllerBase
         {
             ErrorType.Conflict => StatusCodes.Status409Conflict,
             ErrorType.Validation => StatusCodes.Status422UnprocessableEntity,
-            ErrorType.NotFound => StatusCodes.Status410Gone,
+            ErrorType.NotFound => StatusCodes.Status404NotFound,
             ErrorType.Unauthorized => StatusCodes.Status401Unauthorized,
             ErrorType.Forbidden => StatusCodes.Status403Forbidden,
             _ => StatusCodes.Status500InternalServerError,

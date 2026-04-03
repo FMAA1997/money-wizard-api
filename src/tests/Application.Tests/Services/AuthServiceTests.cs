@@ -1,3 +1,4 @@
+using Domain.Abstractions;
 using Domain.Abstractions.Repositories;
 using Domain.Errors;
 using Domain.Models;
@@ -10,24 +11,25 @@ namespace Application.Tests.Services;
 public class AuthServiceTests
 {
     private readonly Mock<IUserRepository> _repositoryMock = new();
+    private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
     private readonly AuthService _sut;
 
     public AuthServiceTests()
     {
-        _sut = new AuthService(_repositoryMock.Object);
+        _sut = new AuthService(_repositoryMock.Object, _unitOfWorkMock.Object);
     }
 
     [Fact]
-    public async Task SyncUserAsync_WhenUserExists_ReturnsUser()
+    public async Task Sync_WhenUserExists_ReturnsUser()
     {
         // Arrange
         var user = new User { ExternalId = "ext-123", Name = "John", Email = "john@test.com", Dob = new DateOnly(1990, 1, 1) };
         _repositoryMock
-            .Setup(r => r.GetByExternalIdAsync("ext-123", It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetByExternalId("ext-123", It.IsAny<CancellationToken>()))
             .ReturnsAsync(user);
 
         // Act
-        var result = await _sut.SyncUserAsync("ext-123");
+        var result = await _sut.Sync("ext-123");
 
         // Assert
         result.IsError.Should().BeFalse();
@@ -36,15 +38,15 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task SyncUserAsync_WhenUserDoesNotExist_ReturnsNotFoundError()
+    public async Task Sync_WhenUserDoesNotExist_ReturnsNotFoundError()
     {
         // Arrange
         _repositoryMock
-            .Setup(r => r.GetByExternalIdAsync("unknown", It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetByExternalId("unknown", It.IsAny<CancellationToken>()))
             .ReturnsAsync((User?)null);
 
         // Act
-        var result = await _sut.SyncUserAsync("unknown");
+        var result = await _sut.Sync("unknown");
 
         // Assert
         result.IsError.Should().BeTrue();
@@ -52,10 +54,10 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task SyncUserAsync_WhenExternalIdIsEmpty_ReturnsUnauthorizedError()
+    public async Task Sync_WhenExternalIdIsEmpty_ReturnsUnauthorizedError()
     {
         // Act
-        var result = await _sut.SyncUserAsync("");
+        var result = await _sut.Sync("");
 
         // Assert
         result.IsError.Should().BeTrue();
@@ -63,38 +65,39 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task RegisterUserAsync_HappyPath_CreatesAndReturnsUser()
+    public async Task Register_HappyPath_CreatesAndReturnsUser()
     {
         // Arrange
         _repositoryMock
-            .Setup(r => r.GetByExternalIdAsync("ext-123", It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetByExternalId("ext-123", It.IsAny<CancellationToken>()))
             .ReturnsAsync((User?)null);
         _repositoryMock
-            .Setup(r => r.ExistsByEmailAsync("john@test.com", It.IsAny<CancellationToken>()))
+            .Setup(r => r.ExistsByEmail("john@test.com", It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
         // Act
-        var result = await _sut.RegisterUserAsync("ext-123", "john@test.com", "John", new DateOnly(1990, 1, 1));
+        var result = await _sut.Register("ext-123", "john@test.com", "John", new DateOnly(1990, 1, 1));
 
         // Assert
         result.IsError.Should().BeFalse();
         result.Value.Name.Should().Be("John");
         result.Value.Email.Should().Be("john@test.com");
         result.Value.DateOfBirth.Should().Be(new DateOnly(1990, 1, 1));
-        _repositoryMock.Verify(r => r.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()), Times.Once);
+        _repositoryMock.Verify(r => r.Add(It.IsAny<User>(), It.IsAny<CancellationToken>()), Times.Once);
+        _unitOfWorkMock.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task RegisterUserAsync_DuplicateExternalId_ReturnsConflictError()
+    public async Task Register_DuplicateExternalId_ReturnsConflictError()
     {
         // Arrange
         var existingUser = new User { ExternalId = "ext-123", Name = "John", Email = "john@test.com", Dob = new DateOnly(1990, 1, 1) };
         _repositoryMock
-            .Setup(r => r.GetByExternalIdAsync("ext-123", It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetByExternalId("ext-123", It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingUser);
 
         // Act
-        var result = await _sut.RegisterUserAsync("ext-123", "other@test.com", "Jane", new DateOnly(1995, 5, 5));
+        var result = await _sut.Register("ext-123", "other@test.com", "Jane", new DateOnly(1995, 5, 5));
 
         // Assert
         result.IsError.Should().BeTrue();
@@ -102,18 +105,18 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task RegisterUserAsync_DuplicateEmail_ReturnsConflictError()
+    public async Task Register_DuplicateEmail_ReturnsConflictError()
     {
         // Arrange
         _repositoryMock
-            .Setup(r => r.GetByExternalIdAsync("ext-456", It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetByExternalId("ext-456", It.IsAny<CancellationToken>()))
             .ReturnsAsync((User?)null);
         _repositoryMock
-            .Setup(r => r.ExistsByEmailAsync("john@test.com", It.IsAny<CancellationToken>()))
+            .Setup(r => r.ExistsByEmail("john@test.com", It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
-        var result = await _sut.RegisterUserAsync("ext-456", "john@test.com", "Jane", new DateOnly(1995, 5, 5));
+        var result = await _sut.Register("ext-456", "john@test.com", "Jane", new DateOnly(1995, 5, 5));
 
         // Assert
         result.IsError.Should().BeTrue();
@@ -121,10 +124,10 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task RegisterUserAsync_MissingExternalId_ReturnsUnauthorizedError()
+    public async Task Register_MissingExternalId_ReturnsUnauthorizedError()
     {
         // Act
-        var result = await _sut.RegisterUserAsync(null, "john@test.com", "John", new DateOnly(1990, 1, 1));
+        var result = await _sut.Register(null, "john@test.com", "John", new DateOnly(1990, 1, 1));
 
         // Assert
         result.IsError.Should().BeTrue();
@@ -132,10 +135,10 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task RegisterUserAsync_MissingEmail_ReturnsUnauthorizedError()
+    public async Task Register_MissingEmail_ReturnsUnauthorizedError()
     {
         // Act
-        var result = await _sut.RegisterUserAsync("ext-123", null, "John", new DateOnly(1990, 1, 1));
+        var result = await _sut.Register("ext-123", null, "John", new DateOnly(1990, 1, 1));
 
         // Assert
         result.IsError.Should().BeTrue();

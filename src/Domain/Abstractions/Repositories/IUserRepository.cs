@@ -4,6 +4,6 @@ namespace Domain.Abstractions.Repositories;
 
 public interface IUserRepository : IRepository<User>
 {
-    Task<User?> GetByExternalIdAsync(string externalId, CancellationToken cancellationToken = default);
-    Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default);
+    Task<User?> GetByExternalId(string externalId, CancellationToken cancellationToken = default);
+    Task<bool> ExistsByEmail(string email, CancellationToken cancellationToken = default);
 }

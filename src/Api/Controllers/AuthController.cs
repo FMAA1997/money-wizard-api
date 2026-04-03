@@ -10,19 +10,19 @@ namespace Api.Controllers;
 [Authorize]
 public sealed class AuthController(IAuthService authService) : ErrorController
 {
-    [HttpPost("sync")]
+    [HttpGet("sync")]
     public async Task<ActionResult<UserResponse>> Sync(CancellationToken cancellationToken)
-        => MatchOk(await authService.SyncUserAsync(
-            User.FindFirstValue("user_id"), cancellationToken));
+        => MatchOk(await authService.Sync(User.FindFirstValue("user_id"), cancellationToken));
 
     [HttpPost("register")]
-    public async Task<ActionResult<UserResponse>> Register(
-        [FromBody] RegisterRequest request,
-        CancellationToken cancellationToken)
-        => MatchOk(await authService.RegisterUserAsync(
-            User.FindFirstValue("user_id"),
-            User.FindFirstValue(ClaimTypes.Email) ?? User.FindFirstValue("email"),
-            request.Name,
-            request.DateOfBirth,
-            cancellationToken));
+    public async Task<ActionResult<UserResponse>> Register([FromBody] RegisterRequest request, CancellationToken cancellationToken) =>
+        MatchOk(
+            await authService.Register(
+                User.FindFirstValue("user_id"),
+                User.FindFirstValue(ClaimTypes.Email) ?? User.FindFirstValue("email"),
+                request.Name,
+                request.DateOfBirth,
+                cancellationToken
+            )
+        );
 }

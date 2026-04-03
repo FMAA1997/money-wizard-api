@@ -6,33 +6,24 @@ namespace Infrastructure.Data.Repositories;
 
 public sealed class UserRepository(ApplicationDbContext context) : IUserRepository
 {
-    public async Task<User?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task<User?> GetById(Guid id, CancellationToken cancellationToken = default)
         => await context.Users.FindAsync([id], cancellationToken);
 
-    public async Task<IReadOnlyList<User>> GetAllAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<User>> GetAll(CancellationToken cancellationToken = default)
         => await context.Users.ToListAsync(cancellationToken);
 
-    public async Task AddAsync(User entity, CancellationToken cancellationToken = default)
-    {
-        context.Users.Add(entity);
-        await context.SaveChangesAsync(cancellationToken);
-    }
+    public async Task Add(User entity, CancellationToken cancellationToken = default)
+        => await context.Users.AddAsync(entity, cancellationToken);
 
-    public async Task UpdateAsync(User entity, CancellationToken cancellationToken = default)
-    {
-        context.Users.Update(entity);
-        await context.SaveChangesAsync(cancellationToken);
-    }
+    public void Update(User entity)
+        => context.Users.Update(entity);
 
-    public async Task DeleteAsync(User entity, CancellationToken cancellationToken = default)
-    {
-        context.Users.Remove(entity);
-        await context.SaveChangesAsync(cancellationToken);
-    }
+    public void Delete(User entity)
+        => context.Users.Remove(entity);
 
-    public async Task<User?> GetByExternalIdAsync(string externalId, CancellationToken cancellationToken = default)
+    public async Task<User?> GetByExternalId(string externalId, CancellationToken cancellationToken = default)
         => await context.Users.FirstOrDefaultAsync(u => u.ExternalId == externalId, cancellationToken);
 
-    public async Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default)
+    public async Task<bool> ExistsByEmail(string email, CancellationToken cancellationToken = default)
         => await context.Users.AnyAsync(u => u.Email == email, cancellationToken);
 }
