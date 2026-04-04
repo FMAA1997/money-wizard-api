@@ -8,6 +8,8 @@ public static class DependencyInjection
     {
         services.AddScoped<Abstractions.Services.IAuthService, Services.AuthService>();
         services.AddScoped<Abstractions.Services.IPaycheckService, Services.PaycheckService>();
+        services.AddScoped<Abstractions.Services.IExpenseService, Services.ExpenseService>();
+        services.AddScoped<Abstractions.Services.IExpenseCategoryService, Services.ExpenseCategoryService>();
 
         return services;
     }

@@ -18,6 +18,8 @@ public static class DependencyInjection
         services.AddScoped<Domain.Abstractions.IUnitOfWork, Data.UnitOfWork>();
         services.AddScoped<Domain.Abstractions.Repositories.IUserRepository, Data.Repositories.UserRepository>();
         services.AddScoped<Domain.Abstractions.Repositories.IPaycheckRepository, Data.Repositories.PaycheckRepository>();
+        services.AddScoped<Domain.Abstractions.Repositories.IExpenseRepository, Data.Repositories.ExpenseRepository>();
+        services.AddScoped<Domain.Abstractions.Repositories.IExpenseCategoryRepository, Data.Repositories.ExpenseCategoryRepository>();
 
         return services;
     }

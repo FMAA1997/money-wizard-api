@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Domain.Models;
 
 public sealed class Expense : Entity
@@ -9,7 +11,10 @@ public sealed class Expense : Entity
     public Guid? CategoryId { get; set; }
     public Guid? Source { get; set; }
 
+    [JsonIgnore]
     public User User { get; set; } = null!;
+    [JsonIgnore]
     public ExpenseCategory? Category { get; set; }
+    [JsonIgnore]
     public Paycheck? Paycheck { get; set; }
 }

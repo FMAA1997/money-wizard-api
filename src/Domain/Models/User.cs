@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Domain.Models;
 
 public sealed class User : Entity
@@ -7,7 +9,10 @@ public sealed class User : Entity
     public required string Email { get; set; }
     public DateOnly Dob { get; set; }
 
+    [JsonIgnore]
     public ICollection<Paycheck> Paychecks { get; set; } = [];
+    [JsonIgnore]
     public ICollection<Expense> Expenses { get; set; } = [];
+    [JsonIgnore]
     public ICollection<ExpenseCategory> ExpenseCategories { get; set; } = [];
 }
