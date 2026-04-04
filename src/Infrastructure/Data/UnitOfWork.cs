@@ -5,9 +5,9 @@ using Microsoft.EntityFrameworkCore.Storage;
 
 namespace Infrastructure.Data;
 
-internal sealed class UnitOfWork(ApplicationDbContext context) : IUnitOfWork
+internal sealed class UnitOfWork(MoneyWizardContext context) : IUnitOfWork
 {
-    private readonly ApplicationDbContext _context = context;
+    private readonly MoneyWizardContext _context = context;
     public IDbConnection Connection => _context.Database.GetDbConnection();
     public IDbTransaction? Transaction { get; private set; }
 

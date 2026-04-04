@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Infrastructure.Data.Repositories;
 
-public sealed class UserRepository(ApplicationDbContext context) : IUserRepository
+public sealed class UserRepository(MoneyWizardContext context) : IUserRepository
 {
     public async Task<User?> GetById(Guid id, CancellationToken cancellationToken = default)
         => await context.Users.FindAsync([id], cancellationToken);

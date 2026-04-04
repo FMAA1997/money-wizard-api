@@ -11,12 +11,13 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        services.AddDbContext<ApplicationDbContext>(options =>
+        services.AddDbContext<MoneyWizardContext>(options =>
             options.UseNpgsql(
                 configuration.GetConnectionString("DefaultConnection")));
 
         services.AddScoped<Domain.Abstractions.IUnitOfWork, Data.UnitOfWork>();
         services.AddScoped<Domain.Abstractions.Repositories.IUserRepository, Data.Repositories.UserRepository>();
+        services.AddScoped<Domain.Abstractions.Repositories.IPaycheckRepository, Data.Repositories.PaycheckRepository>();
 
         return services;
     }

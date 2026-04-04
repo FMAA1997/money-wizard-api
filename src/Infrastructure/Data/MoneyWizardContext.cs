@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Infrastructure.Data;
 
-public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+public sealed class MoneyWizardContext(DbContextOptions<MoneyWizardContext> options)
     : DbContext(options)
 {
     public DbSet<User> Users => Set<User>();
@@ -14,7 +14,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.ApplyConfigurationsFromAssembly(typeof(ApplicationDbContext).Assembly);
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(MoneyWizardContext).Assembly);
         base.OnModelCreating(modelBuilder);
     }
 }
