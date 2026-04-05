@@ -14,9 +14,9 @@ public sealed class ExpenseCategoryConfiguration : IEntityTypeConfiguration<Expe
             .IsRequired()
             .HasMaxLength(200);
 
-        builder.Property(ec => ec.Description)
+        builder.Property(ec => ec.Color)
             .IsRequired()
-            .HasMaxLength(500);
+            .HasMaxLength(50);
 
         builder.HasOne(ec => ec.User)
             .WithMany(u => u.ExpenseCategories)

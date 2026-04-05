@@ -55,7 +55,7 @@ public sealed class ExpenseCategoryService(
         {
             UserId = user.Id,
             Name = request.Name,
-            Description = request.Description
+            Color = request.Color
         };
 
         await expenseCategoryRepository.Add(category, cancellationToken);
@@ -78,7 +78,7 @@ public sealed class ExpenseCategoryService(
             return ExpenseCategoryErrors.NotFound;
 
         category.Name = request.Name;
-        category.Description = request.Description;
+        category.Color = request.Color;
 
         expenseCategoryRepository.Update(category);
         await unitOfWork.SaveChangesAsync(cancellationToken);

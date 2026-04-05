@@ -6,7 +6,7 @@ public sealed class ExpenseCategory : Entity
 {
     public Guid UserId { get; set; }
     public required string Name { get; set; }
-    public required string Description { get; set; }
+    public required string Color { get; set; }
 
     [JsonIgnore]
     public User User { get; set; } = null!;
