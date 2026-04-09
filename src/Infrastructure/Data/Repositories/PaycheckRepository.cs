@@ -23,4 +23,26 @@ public sealed class PaycheckRepository(MoneyWizardContext context) : IPaycheckRe
 
     public async Task<IReadOnlyList<Paycheck>> GetByUserId(Guid userId, CancellationToken cancellationToken = default)
         => await context.Paychecks.Where(p => p.UserId == userId).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<Paycheck>> GetByUserIdInRange(Guid userId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+        => await context.Paychecks
+            .Where(p => p.UserId == userId
+                && (
+                    (p.Date >= startDate && p.Date <= endDate)
+                    || (p.RecurrenceRule != null && p.Date < startDate
+                        && (p.RecurrenceRule!.EndDate == null || p.RecurrenceRule!.EndDate >= startDate))
+                ))
+            .ToListAsync(cancellationToken);
+
+    public async Task<Paycheck?> GetException(Guid recurringPaycheckId, DateOnly originalDate, CancellationToken cancellationToken = default)
+        => await context.Paychecks
+            .FirstOrDefaultAsync(p => p.RecurringPaycheckId == recurringPaycheckId
+                && p.OriginalDate == originalDate, cancellationToken);
+
+    public async Task DeleteExceptionsFromDate(Guid recurringPaycheckId, DateOnly fromDate, CancellationToken cancellationToken = default)
+        => await context.Paychecks
+            .Where(p => p.RecurringPaycheckId == recurringPaycheckId
+                && p.OriginalDate != null
+                && p.OriginalDate >= fromDate)
+            .ExecuteDeleteAsync(cancellationToken);
 }

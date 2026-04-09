@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Application.Abstractions.Services;
+using Application.DTOs.Expense;
 using Domain.Models;
 using Domain.Requests;
 using Microsoft.AspNetCore.Authorization;
@@ -12,8 +13,9 @@ namespace Api.Controllers;
 public sealed class ExpenseController(IExpenseService expenseService) : ErrorController
 {
     [HttpGet]
-    public async Task<ActionResult<IReadOnlyList<Expense>>> GetAll(CancellationToken cancellationToken)
-        => MatchOk(await expenseService.GetAll(User.FindFirstValue("user_id"), cancellationToken));
+    public async Task<ActionResult<IReadOnlyList<ExpenseResponse>>> GetAll(
+        [FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate, CancellationToken cancellationToken)
+        => MatchOk(await expenseService.GetAllInRange(User.FindFirstValue("user_id"), startDate, endDate, cancellationToken));
 
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<Expense>> GetById(Guid id, CancellationToken cancellationToken)
@@ -30,4 +32,22 @@ public sealed class ExpenseController(IExpenseService expenseService) : ErrorCon
     [HttpDelete("{id:guid}")]
     public async Task<ActionResult> Delete(Guid id, CancellationToken cancellationToken)
         => MatchNoContent(await expenseService.Delete(User.FindFirstValue("user_id"), id, cancellationToken));
+
+    [HttpPut("{id:guid}/occurrence/{date}")]
+    public async Task<ActionResult<ExpenseResponse>> UpdateOccurrence(
+        Guid id, DateOnly date, [FromBody] UpdateExpenseOccurrenceRequest request, CancellationToken cancellationToken)
+        => MatchOk(await expenseService.UpdateOccurrence(User.FindFirstValue("user_id"), id, date, request, cancellationToken));
+
+    [HttpPut("{id:guid}/from/{date}")]
+    public async Task<ActionResult<Expense>> UpdateFromDate(
+        Guid id, DateOnly date, [FromBody] UpdateExpenseRequest request, CancellationToken cancellationToken)
+        => MatchOk(await expenseService.UpdateFromDate(User.FindFirstValue("user_id"), id, date, request, cancellationToken));
+
+    [HttpDelete("{id:guid}/occurrence/{date}")]
+    public async Task<ActionResult> DeleteOccurrence(Guid id, DateOnly date, CancellationToken cancellationToken)
+        => MatchNoContent(await expenseService.DeleteOccurrence(User.FindFirstValue("user_id"), id, date, cancellationToken));
+
+    [HttpDelete("{id:guid}/from/{date}")]
+    public async Task<ActionResult> DeleteFromDate(Guid id, DateOnly date, CancellationToken cancellationToken)
+        => MatchNoContent(await expenseService.DeleteFromDate(User.FindFirstValue("user_id"), id, date, cancellationToken));
 }

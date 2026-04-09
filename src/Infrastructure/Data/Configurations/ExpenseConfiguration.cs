@@ -31,5 +31,27 @@ public sealed class ExpenseConfiguration : IEntityTypeConfiguration<Expense>
             .WithMany(p => p.Expenses)
             .HasForeignKey(e => e.Source)
             .OnDelete(DeleteBehavior.SetNull);
+
+        // Recurrence rule (owned type — columns on same table)
+        builder.OwnsOne(e => e.RecurrenceRule, rule =>
+        {
+            rule.Property(r => r.Frequency).HasColumnName("RecurrenceFrequency");
+            rule.Property(r => r.Interval).HasColumnName("RecurrenceInterval");
+            rule.Property(r => r.EndDate).HasColumnName("RecurrenceEndDate");
+            rule.Property(r => r.TotalInstallments).HasColumnName("RecurrenceTotalInstallments");
+        });
+
+        // Self-referential FK for overrides/exceptions
+        builder.HasOne(e => e.RecurringExpense)
+            .WithMany(e => e.Exceptions)
+            .HasForeignKey(e => e.RecurringExpenseId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Property(e => e.IsDeleted).HasDefaultValue(false);
+
+        // One override per occurrence date per series
+        builder.HasIndex(e => new { e.RecurringExpenseId, e.OriginalDate })
+            .IsUnique()
+            .HasFilter("\"RecurringExpenseId\" IS NOT NULL");
     }
 }

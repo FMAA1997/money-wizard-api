@@ -11,10 +11,22 @@ public sealed class Expense : Entity
     public Guid? CategoryId { get; set; }
     public Guid? Source { get; set; }
 
+    // Recurrence
+    public RecurrenceRule? RecurrenceRule { get; set; }
+
+    // Override/exception support
+    public Guid? RecurringExpenseId { get; set; }
+    public DateOnly? OriginalDate { get; set; }
+    public bool IsDeleted { get; set; }
+
     [JsonIgnore]
     public User User { get; set; } = null!;
     [JsonIgnore]
     public ExpenseCategory? Category { get; set; }
     [JsonIgnore]
     public Paycheck? Paycheck { get; set; }
+    [JsonIgnore]
+    public Expense? RecurringExpense { get; set; }
+    [JsonIgnore]
+    public ICollection<Expense> Exceptions { get; set; } = [];
 }

@@ -23,4 +23,26 @@ public sealed class ExpenseRepository(MoneyWizardContext context) : IExpenseRepo
 
     public async Task<IReadOnlyList<Expense>> GetByUserId(Guid userId, CancellationToken cancellationToken = default)
         => await context.Expenses.Where(e => e.UserId == userId).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<Expense>> GetByUserIdInRange(Guid userId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+        => await context.Expenses
+            .Where(e => e.UserId == userId
+                && (
+                    (e.Date >= startDate && e.Date <= endDate)
+                    || (e.RecurrenceRule != null && e.Date < startDate
+                        && (e.RecurrenceRule!.EndDate == null || e.RecurrenceRule!.EndDate >= startDate))
+                ))
+            .ToListAsync(cancellationToken);
+
+    public async Task<Expense?> GetException(Guid recurringExpenseId, DateOnly originalDate, CancellationToken cancellationToken = default)
+        => await context.Expenses
+            .FirstOrDefaultAsync(e => e.RecurringExpenseId == recurringExpenseId
+                && e.OriginalDate == originalDate, cancellationToken);
+
+    public async Task DeleteExceptionsFromDate(Guid recurringExpenseId, DateOnly fromDate, CancellationToken cancellationToken = default)
+        => await context.Expenses
+            .Where(e => e.RecurringExpenseId == recurringExpenseId
+                && e.OriginalDate != null
+                && e.OriginalDate >= fromDate)
+            .ExecuteDeleteAsync(cancellationToken);
 }
