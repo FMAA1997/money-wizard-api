@@ -10,7 +10,7 @@ namespace Api.Controllers;
 
 [Route("api/[controller]")]
 [Authorize]
-public sealed class PaycheckController(IPaycheckService paycheckService) : ErrorController
+public sealed class PaychecksController(IPaycheckService paycheckService) : ErrorController
 {
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<Paycheck>>> GetAll(
