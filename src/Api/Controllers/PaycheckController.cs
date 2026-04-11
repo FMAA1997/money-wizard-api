@@ -13,7 +13,7 @@ namespace Api.Controllers;
 public sealed class PaycheckController(IPaycheckService paycheckService) : ErrorController
 {
     [HttpGet]
-    public async Task<ActionResult<IReadOnlyList<PaycheckResponse>>> GetAll(
+    public async Task<ActionResult<IReadOnlyList<Paycheck>>> GetAll(
         [FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate, CancellationToken cancellationToken)
         => MatchOk(await paycheckService.GetAllInRange(User.FindFirstValue("user_id"), startDate, endDate, cancellationToken));
 

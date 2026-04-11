@@ -16,7 +16,7 @@ public sealed class PaycheckService(
     IUserRepository userRepository,
     IUnitOfWork unitOfWork) : IPaycheckService
 {
-    public async Task<ErrorOr<IReadOnlyList<PaycheckResponse>>> GetAllInRange(string? externalId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<IReadOnlyList<Paycheck>>> GetAllInRange(string? externalId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(externalId))
             return AuthErrors.MissingExternalId;
@@ -28,48 +28,7 @@ public sealed class PaycheckService(
             return AuthErrors.UserNotFound;
 
         var paychecks = await paycheckRepository.GetByUserIdInRange(user.Id, startDate, endDate, cancellationToken);
-
-        var oneOffs = new List<Paycheck>();
-        var series = new List<Paycheck>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Paycheck>();
-
-        foreach (var p in paychecks)
-        {
-            if (p.RecurrenceRule is not null)
-                series.Add(p);
-            else if (p.RecurringPaycheckId.HasValue && p.OriginalDate.HasValue)
-                exceptionLookup[(p.RecurringPaycheckId.Value, p.OriginalDate.Value)] = p;
-            else
-                oneOffs.Add(p);
-        }
-
-        var results = oneOffs
-            .Select(MapOneOff)
-            .ToList();
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-
-            foreach (var (date, index) in occurrences)
-            {
-                var key = (s.Id, date);
-                if (exceptionLookup.TryGetValue(key, out var exception))
-                {
-                    if (exception.IsDeleted)
-                        continue;
-
-                    results.Add(MapOverride(exception, s, index));
-                }
-                else
-                {
-                    results.Add(MapVirtual(s, date, index));
-                }
-            }
-        }
-
-        results.Sort((a, b) => a.Date.CompareTo(b.Date));
-        return results;
+        return paychecks.ToList();
     }
 
     public async Task<ErrorOr<Paycheck>> GetById(string? externalId, Guid id, CancellationToken cancellationToken = default)
@@ -364,11 +323,18 @@ public sealed class PaycheckService(
 
     public async Task<ErrorOr<PaycheckCalendarResponse>> GetCalendar(string? externalId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
-        var result = await GetAllInRange(externalId, startDate, endDate, cancellationToken);
-        if (result.IsError)
-            return result.Errors;
+        if (string.IsNullOrEmpty(externalId))
+            return AuthErrors.MissingExternalId;
+        if (startDate > endDate)
+            return RecurrenceErrors.InvalidDateRange;
 
-        var occurrences = result.Value;
+        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
+        if (user is null)
+            return AuthErrors.UserNotFound;
+
+        var paychecks = await paycheckRepository.GetByUserIdInRange(user.Id, startDate, endDate, cancellationToken);
+
+        var occurrences = ExpandOccurrences(paychecks, startDate, endDate);
 
         var months = new List<string>();
         var current = new DateOnly(startDate.Year, startDate.Month, 1);
@@ -400,6 +366,51 @@ public sealed class PaycheckService(
             .ToList();
 
         return new PaycheckCalendarResponse(months, rows);
+    }
+
+    private static List<PaycheckResponse> ExpandOccurrences(IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate)
+    {
+        var oneOffs = new List<Paycheck>();
+        var series = new List<Paycheck>();
+        var exceptionLookup = new Dictionary<(Guid, DateOnly), Paycheck>();
+
+        foreach (var p in paychecks)
+        {
+            if (p.RecurrenceRule is not null)
+                series.Add(p);
+            else if (p.RecurringPaycheckId.HasValue && p.OriginalDate.HasValue)
+                exceptionLookup[(p.RecurringPaycheckId.Value, p.OriginalDate.Value)] = p;
+            else
+                oneOffs.Add(p);
+        }
+
+        var results = oneOffs
+            .Select(MapOneOff)
+            .ToList();
+
+        foreach (var s in series)
+        {
+            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
+
+            foreach (var (date, index) in occurrences)
+            {
+                var key = (s.Id, date);
+                if (exceptionLookup.TryGetValue(key, out var exception))
+                {
+                    if (exception.IsDeleted)
+                        continue;
+
+                    results.Add(MapOverride(exception, s, index));
+                }
+                else
+                {
+                    results.Add(MapVirtual(s, date, index));
+                }
+            }
+        }
+
+        results.Sort((a, b) => a.Date.CompareTo(b.Date));
+        return results;
     }
 
     private static PaycheckResponse MapOneOff(Paycheck paycheck) =>
