@@ -1,3 +1,4 @@
+using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Paycheck;
 using Application.DTOs.Shared;
@@ -13,49 +14,29 @@ namespace Application.Services;
 
 public sealed class PaycheckService(
     IPaycheckRepository paycheckRepository,
-    IUserRepository userRepository,
+    ICurrentUserProvider currentUserProvider,
     IUnitOfWork unitOfWork) : IPaycheckService
 {
-    public async Task<ErrorOr<IReadOnlyList<Paycheck>>> GetAllInRange(string? externalId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<IReadOnlyList<Paycheck>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
-        var paychecks = await paycheckRepository.GetByUserIdInRange(user.Id, startDate, endDate, cancellationToken);
+        var paychecks = await paycheckRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
         return paychecks.ToList();
     }
 
-    public async Task<ErrorOr<Paycheck>> GetById(string? externalId, Guid id, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<Paycheck>> GetById(Guid id, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         var paycheck = await paycheckRepository.GetById(id, cancellationToken);
-        if (paycheck is null || paycheck.UserId != user.Id)
+        if (paycheck is null || paycheck.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
         return paycheck;
     }
 
-    public async Task<ErrorOr<Paycheck>> Create(string? externalId, CreatePaycheckRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<Paycheck>> Create(CreatePaycheckRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         if (request.Recurrence is not null)
         {
             if (request.Recurrence.Interval < 1)
@@ -66,7 +47,7 @@ public sealed class PaycheckService(
 
         var paycheck = new Paycheck
         {
-            UserId = user.Id,
+            UserId = currentUserProvider.UserId,
             Date = request.Date,
             Amount = request.Amount,
             Description = request.Description,
@@ -85,17 +66,10 @@ public sealed class PaycheckService(
         return paycheck;
     }
 
-    public async Task<ErrorOr<Paycheck>> Update(string? externalId, Guid id, UpdatePaycheckRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<Paycheck>> Update(Guid id, UpdatePaycheckRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         var paycheck = await paycheckRepository.GetById(id, cancellationToken);
-        if (paycheck is null || paycheck.UserId != user.Id)
+        if (paycheck is null || paycheck.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
         if (request.Recurrence is not null)
@@ -123,17 +97,10 @@ public sealed class PaycheckService(
         return paycheck;
     }
 
-    public async Task<ErrorOr<Deleted>> Delete(string? externalId, Guid id, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<Deleted>> Delete(Guid id, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         var paycheck = await paycheckRepository.GetById(id, cancellationToken);
-        if (paycheck is null || paycheck.UserId != user.Id)
+        if (paycheck is null || paycheck.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
         paycheckRepository.Delete(paycheck);
@@ -142,17 +109,10 @@ public sealed class PaycheckService(
         return Result.Deleted;
     }
 
-    public async Task<ErrorOr<PaycheckResponse>> UpdateOccurrence(string? externalId, Guid id, DateOnly date, UpdatePaycheckOccurrenceRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<PaycheckResponse>> UpdateOccurrence(Guid id, DateOnly date, UpdatePaycheckOccurrenceRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         var series = await paycheckRepository.GetById(id, cancellationToken);
-        if (series is null || series.UserId != user.Id)
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
         if (series.RecurrenceRule is null)
             return RecurrenceErrors.NotRecurring;
@@ -177,7 +137,7 @@ public sealed class PaycheckService(
 
         var exception = new Paycheck
         {
-            UserId = user.Id,
+            UserId = currentUserProvider.UserId,
             Date = request.Date ?? date,
             Amount = request.Amount ?? series.Amount,
             Description = request.Description ?? series.Description,
@@ -191,17 +151,10 @@ public sealed class PaycheckService(
         return MapOverride(exception, series, occurrenceIndex);
     }
 
-    public async Task<ErrorOr<Paycheck>> UpdateFromDate(string? externalId, Guid id, DateOnly date, UpdatePaycheckRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<Paycheck>> UpdateFromDate(Guid id, DateOnly date, UpdatePaycheckRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         var series = await paycheckRepository.GetById(id, cancellationToken);
-        if (series is null || series.UserId != user.Id)
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
         if (series.RecurrenceRule is null)
             return RecurrenceErrors.NotRecurring;
@@ -224,7 +177,7 @@ public sealed class PaycheckService(
         var recurrence = request.Recurrence;
         var newSeries = new Paycheck
         {
-            UserId = user.Id,
+            UserId = currentUserProvider.UserId,
             Date = request.Date,
             Amount = request.Amount,
             Description = request.Description,
@@ -243,17 +196,10 @@ public sealed class PaycheckService(
         return newSeries;
     }
 
-    public async Task<ErrorOr<Deleted>> DeleteOccurrence(string? externalId, Guid id, DateOnly date, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<Deleted>> DeleteOccurrence(Guid id, DateOnly date, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         var series = await paycheckRepository.GetById(id, cancellationToken);
-        if (series is null || series.UserId != user.Id)
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
         if (series.RecurrenceRule is null)
             return RecurrenceErrors.NotRecurring;
@@ -271,7 +217,7 @@ public sealed class PaycheckService(
         {
             var exception = new Paycheck
             {
-                UserId = user.Id,
+                UserId = currentUserProvider.UserId,
                 Date = date,
                 Amount = series.Amount,
                 Description = series.Description,
@@ -286,17 +232,10 @@ public sealed class PaycheckService(
         return Result.Deleted;
     }
 
-    public async Task<ErrorOr<Deleted>> DeleteFromDate(string? externalId, Guid id, DateOnly date, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<Deleted>> DeleteFromDate(Guid id, DateOnly date, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         var series = await paycheckRepository.GetById(id, cancellationToken);
-        if (series is null || series.UserId != user.Id)
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
         if (series.RecurrenceRule is null)
             return RecurrenceErrors.NotRecurring;
@@ -321,18 +260,12 @@ public sealed class PaycheckService(
         return Result.Deleted;
     }
 
-    public async Task<ErrorOr<PaycheckCalendarResponse>> GetCalendar(string? externalId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<CalendarResponse<PaycheckCalendarRow>>> GetCalendar(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
-        var paychecks = await paycheckRepository.GetByUserIdInRange(user.Id, startDate, endDate, cancellationToken);
+        var paychecks = await paycheckRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
 
         var occurrences = ExpandOccurrences(paychecks, startDate, endDate);
 
@@ -354,7 +287,7 @@ public sealed class PaycheckService(
                     .GroupBy(o => o.Date.ToString("yyyy-MM"))
                     .ToDictionary(
                         mg => mg.Key,
-                        mg => (IReadOnlyList<PaycheckResponse>)mg.OrderBy(o => o.Date).ToList());
+                        mg => (IReadOnlyList<PaycheckResponse>)[.. mg.OrderBy(o => o.Date)]);
 
                 return new PaycheckCalendarRow(
                     PaycheckId: g.Key,
@@ -365,7 +298,14 @@ public sealed class PaycheckService(
             })
             .ToList();
 
-        return new PaycheckCalendarResponse(months, rows);
+        var totals = months
+            .Select(m => rows
+                .Where(r => r.Occurrences.ContainsKey(m))
+                .SelectMany(r => r.Occurrences[m])
+                .Sum(o => o.Amount))
+            .ToList();
+
+        return new CalendarResponse<PaycheckCalendarRow>(months, rows, totals);
     }
 
     private static List<PaycheckResponse> ExpandOccurrences(IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate)

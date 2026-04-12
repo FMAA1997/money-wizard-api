@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using Application.Abstractions.Services;
 using Application.DTOs.Paycheck.Statistics;
 using Microsoft.AspNetCore.Authorization;
@@ -13,7 +12,6 @@ public sealed class PaycheckStatisticsController(IPaycheckStatisticsService payc
     [HttpGet("totals")]
     public async Task<ActionResult<PaycheckTotals>> GetTotals([FromQuery] int? year = null, CancellationToken cancellationToken = default) =>
         MatchOk(await paycheckStatisticsService.GetTotals(
-            User.FindFirstValue("user_id"),
             year ?? DateTime.UtcNow.Year,
             cancellationToken
         ));
@@ -21,7 +19,6 @@ public sealed class PaycheckStatisticsController(IPaycheckStatisticsService payc
     [HttpGet("monthly-income")]
     public async Task<ActionResult<PaycheckMonthlyIncomeStats>> GetMonthlyIncomeStats([FromQuery] int? year = null, CancellationToken cancellationToken = default) =>
         MatchOk(await paycheckStatisticsService.GetMonthlyIncomeStats(
-            User.FindFirstValue("user_id"),
             year ?? DateTime.UtcNow.Year,
             cancellationToken
         ));
@@ -29,7 +26,6 @@ public sealed class PaycheckStatisticsController(IPaycheckStatisticsService payc
     [HttpGet("upcoming")]
     public async Task<ActionResult<UpcomingPaycheck>> GetUpcoming(CancellationToken cancellationToken) =>
         MatchOk(await paycheckStatisticsService.GetUpcoming(
-            User.FindFirstValue("user_id"),
             cancellationToken
         ));
 }

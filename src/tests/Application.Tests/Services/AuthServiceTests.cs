@@ -1,3 +1,4 @@
+using Application.Abstractions;
 using Domain.Abstractions;
 using Domain.Abstractions.Repositories;
 using Domain.Errors;
@@ -11,25 +12,28 @@ namespace Application.Tests.Services;
 public class AuthServiceTests
 {
     private readonly Mock<IUserRepository> _repositoryMock = new();
+    private readonly Mock<ICurrentUserProvider> _currentUserProviderMock = new();
     private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
     private readonly AuthService _sut;
 
     public AuthServiceTests()
     {
-        _sut = new AuthService(_repositoryMock.Object, _unitOfWorkMock.Object);
+        _sut = new AuthService(_repositoryMock.Object, _currentUserProviderMock.Object, _unitOfWorkMock.Object);
     }
 
     [Fact]
     public async Task Sync_WhenUserExists_ReturnsUser()
     {
         // Arrange
-        var user = new User { ExternalId = "ext-123", Name = "John", Email = "john@test.com", Dob = new DateOnly(1990, 1, 1) };
+        var userId = Guid.NewGuid();
+        var user = new User { Id = userId, ExternalId = "ext-123", Name = "John", Email = "john@test.com", Dob = new DateOnly(1990, 1, 1) };
+        _currentUserProviderMock.Setup(p => p.UserId).Returns(userId);
         _repositoryMock
-            .Setup(r => r.GetByExternalId("ext-123", It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetById(userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(user);
 
         // Act
-        var result = await _sut.Sync("ext-123");
+        var result = await _sut.Sync();
 
         // Assert
         result.IsError.Should().BeFalse();
@@ -41,27 +45,18 @@ public class AuthServiceTests
     public async Task Sync_WhenUserDoesNotExist_ReturnsNotFoundError()
     {
         // Arrange
+        var userId = Guid.NewGuid();
+        _currentUserProviderMock.Setup(p => p.UserId).Returns(userId);
         _repositoryMock
-            .Setup(r => r.GetByExternalId("unknown", It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetById(userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync((User?)null);
 
         // Act
-        var result = await _sut.Sync("unknown");
+        var result = await _sut.Sync();
 
         // Assert
         result.IsError.Should().BeTrue();
         result.FirstError.Should().Be(AuthErrors.UserNotFound);
-    }
-
-    [Fact]
-    public async Task Sync_WhenExternalIdIsEmpty_ReturnsUnauthorizedError()
-    {
-        // Act
-        var result = await _sut.Sync("");
-
-        // Assert
-        result.IsError.Should().BeTrue();
-        result.FirstError.Should().Be(AuthErrors.MissingExternalId);
     }
 
     [Fact]

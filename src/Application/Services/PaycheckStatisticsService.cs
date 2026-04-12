@@ -1,3 +1,4 @@
+using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Paycheck.Statistics;
 using Domain.Abstractions.Repositories;
@@ -10,11 +11,11 @@ namespace Application.Services;
 
 public sealed class PaycheckStatisticsService(
     IPaycheckRepository paycheckRepository,
-    IUserRepository userRepository) : IPaycheckStatisticsService
+    ICurrentUserProvider currentUserProvider) : IPaycheckStatisticsService
 {
-    public async Task<ErrorOr<PaycheckTotals>> GetTotals(string? externalId, int year, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<PaycheckTotals>> GetTotals(int year, CancellationToken cancellationToken = default)
     {
-        var result = await GetYearPaychecks(externalId, year, cancellationToken);
+        var result = await GetYearPaychecks(year, cancellationToken);
         if (result.IsError)
             return result.Errors;
 
@@ -42,9 +43,9 @@ public sealed class PaycheckStatisticsService(
         };
     }
 
-    public async Task<ErrorOr<PaycheckMonthlyIncomeStats>> GetMonthlyIncomeStats(string? externalId, int year, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<PaycheckMonthlyIncomeStats>> GetMonthlyIncomeStats(int year, CancellationToken cancellationToken = default)
     {
-        var result = await GetYearPaychecks(externalId, year, cancellationToken);
+        var result = await GetYearPaychecks(year, cancellationToken);
         if (result.IsError)
             return result.Errors;
 
@@ -52,8 +53,6 @@ public sealed class PaycheckStatisticsService(
 
         var currentYearMonthly = GetMonthlyAmounts(paychecks, currentYearStart, currentYearEnd);
         var previousYearMonthly = GetMonthlyAmounts(paychecks, previousYearStart, currentYearStart.AddDays(-1));
-
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         var avgMonthlyIncome = currentYearMonthly.Values.Sum() / 12;
         var previousYearAvgMonthlyIncome = previousYearMonthly.Values.Sum() / 12;
@@ -72,19 +71,12 @@ public sealed class PaycheckStatisticsService(
         };
     }
 
-    public async Task<ErrorOr<UpcomingPaycheck>> GetUpcoming(string? externalId, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<UpcomingPaycheck>> GetUpcoming(CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var rangeEnd = today.AddYears(1);
 
-        var paychecks = await paycheckRepository.GetByUserIdInRange(user.Id, today, rangeEnd, cancellationToken);
+        var paychecks = await paycheckRepository.GetByUserIdInRange(currentUserProvider.UserId, today, rangeEnd, cancellationToken);
 
         var oneOffs = new List<Paycheck>();
         var series = new List<Paycheck>();
@@ -152,20 +144,13 @@ public sealed class PaycheckStatisticsService(
     }
 
     private async Task<ErrorOr<(IReadOnlyList<Paycheck> Paychecks, DateOnly PreviousYearStart, DateOnly CurrentYearStart, DateOnly CurrentYearEnd)>>
-        GetYearPaychecks(string? externalId, int year, CancellationToken cancellationToken)
+        GetYearPaychecks(int year, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
-        if (user is null)
-            return AuthErrors.UserNotFound;
-
         var previousYearStart = new DateOnly(year - 1, 1, 1);
         var currentYearStart = new DateOnly(year, 1, 1);
         var currentYearEnd = new DateOnly(year, 12, 31);
 
-        var paychecks = await paycheckRepository.GetByUserIdInRange(user.Id, previousYearStart, currentYearEnd, cancellationToken);
+        var paychecks = await paycheckRepository.GetByUserIdInRange(currentUserProvider.UserId, previousYearStart, currentYearEnd, cancellationToken);
 
         return (paychecks, previousYearStart, currentYearStart, currentYearEnd);
     }

@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using Application.Abstractions.Services;
 using Domain.Models;
 using Domain.Requests;
@@ -13,21 +12,21 @@ public sealed class ExpenseCategoryController(IExpenseCategoryService expenseCat
 {
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<ExpenseCategory>>> GetAll(CancellationToken cancellationToken)
-        => MatchOk(await expenseCategoryService.GetAll(User.FindFirstValue("user_id"), cancellationToken));
+        => MatchOk(await expenseCategoryService.GetAll(cancellationToken));
 
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ExpenseCategory>> GetById(Guid id, CancellationToken cancellationToken)
-        => MatchOk(await expenseCategoryService.GetById(User.FindFirstValue("user_id"), id, cancellationToken));
+        => MatchOk(await expenseCategoryService.GetById(id, cancellationToken));
 
     [HttpPost]
     public async Task<ActionResult<ExpenseCategory>> Create([FromBody] CreateExpenseCategoryRequest request, CancellationToken cancellationToken)
-        => MatchOk(await expenseCategoryService.Create(User.FindFirstValue("user_id"), request, cancellationToken));
+        => MatchOk(await expenseCategoryService.Create(request, cancellationToken));
 
     [HttpPut("{id:guid}")]
     public async Task<ActionResult<ExpenseCategory>> Update(Guid id, [FromBody] UpdateExpenseCategoryRequest request, CancellationToken cancellationToken)
-        => MatchOk(await expenseCategoryService.Update(User.FindFirstValue("user_id"), id, request, cancellationToken));
+        => MatchOk(await expenseCategoryService.Update(id, request, cancellationToken));
 
     [HttpDelete("{id:guid}")]
     public async Task<ActionResult> Delete(Guid id, CancellationToken cancellationToken)
-        => MatchNoContent(await expenseCategoryService.Delete(User.FindFirstValue("user_id"), id, cancellationToken));
+        => MatchNoContent(await expenseCategoryService.Delete(id, cancellationToken));
 }

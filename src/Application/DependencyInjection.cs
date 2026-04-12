@@ -11,6 +11,7 @@ public static class DependencyInjection
         services.AddScoped<Abstractions.Services.IExpenseService, Services.ExpenseService>();
         services.AddScoped<Abstractions.Services.IExpenseCategoryService, Services.ExpenseCategoryService>();
         services.AddScoped<Abstractions.Services.IPaycheckStatisticsService, Services.PaycheckStatisticsService>();
+        services.AddScoped<Abstractions.Services.IExpenseStatisticsService, Services.ExpenseStatisticsService>();
 
         return services;
     }

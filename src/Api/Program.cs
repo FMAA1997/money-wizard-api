@@ -47,7 +47,15 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddAuthorization();
-builder.Services.AddControllers();
+
+builder.Services.AddScoped<Api.Providers.CurrentUserProvider>();
+builder.Services.AddScoped<Application.Abstractions.ICurrentUserProvider>(
+    sp => sp.GetRequiredService<Api.Providers.CurrentUserProvider>());
+
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<Api.Filters.ResolveCurrentUserFilter>();
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 

@@ -1,3 +1,4 @@
+using Application.Abstractions;
 using Application.DTOs.Auth;
 using Domain.Abstractions;
 using Domain.Abstractions.Repositories;
@@ -8,14 +9,14 @@ using ErrorOr;
 
 namespace Application.Services;
 
-public sealed class AuthService(IUserRepository userRepository, IUnitOfWork unitOfWork) : IAuthService
+public sealed class AuthService(
+    IUserRepository userRepository,
+    ICurrentUserProvider currentUserProvider,
+    IUnitOfWork unitOfWork) : IAuthService
 {
-    public async Task<ErrorOr<UserResponse>> Sync(string? externalId, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<UserResponse>> Sync(CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(externalId))
-            return AuthErrors.MissingExternalId;
-
-        var user = await userRepository.GetByExternalId(externalId, cancellationToken);
+        var user = await userRepository.GetById(currentUserProvider.UserId, cancellationToken);
         if (user is null)
             return AuthErrors.UserNotFound;
 

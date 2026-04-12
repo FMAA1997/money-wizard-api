@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Api.Filters;
 using Application.DTOs.Auth;
 using Application.Abstractions.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -12,9 +13,10 @@ public sealed class AuthController(IAuthService authService) : ErrorController
 {
     [HttpGet("sync")]
     public async Task<ActionResult<UserResponse>> Sync(CancellationToken cancellationToken)
-        => MatchOk(await authService.Sync(User.FindFirstValue("user_id"), cancellationToken));
+        => MatchOk(await authService.Sync(cancellationToken));
 
     [HttpPost("register")]
+    [SkipUserResolution]
     public async Task<ActionResult<UserResponse>> Register([FromBody] RegisterRequest request, CancellationToken cancellationToken) =>
         MatchOk(
             await authService.Register(

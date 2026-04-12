@@ -26,6 +26,8 @@ public sealed class ExpenseRepository(MoneyWizardContext context) : IExpenseRepo
 
     public async Task<IReadOnlyList<Expense>> GetByUserIdInRange(Guid userId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
         => await context.Expenses
+            .Include(e => e.Category)
+            .Include(e => e.Paycheck)
             .Where(e => e.UserId == userId
                 && (
                     (e.Date >= startDate && e.Date <= endDate)
