@@ -27,4 +27,10 @@ public sealed class AuthController(IAuthService authService) : ErrorController
                 cancellationToken
             )
         );
+
+    [HttpPatch("country")]
+    public async Task<ActionResult<UserResponse>> UpdateCountry(
+        [FromBody] UpdateCountryRequest request,
+        CancellationToken cancellationToken)
+        => MatchOk(await authService.UpdateCountry(request.Country, cancellationToken));
 }

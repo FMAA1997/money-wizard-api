@@ -166,16 +166,20 @@ public sealed class ExpenseStatisticsService(
             .OrderBy(c => c.Name)
             .ToList();
 
-        var monthNames = new[] { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
         var data = new List<Dictionary<string, object>>();
 
         for (var m = 1; m <= 12; m++)
         {
-            var row = new Dictionary<string, object> { ["month"] = monthNames[m - 1] };
+            var monthName = new DateOnly(year, m, 1).ToString("MMM", System.Globalization.CultureInfo.InvariantCulture);
+            var row = new Dictionary<string, object> { ["month"] = monthName };
+            decimal total = 0;
             foreach (var cat in categories)
             {
-                row[cat.Name] = monthlyByCategory.GetValueOrDefault((m, cat.Name));
+                var amount = monthlyByCategory.GetValueOrDefault((m, cat.Name));
+                row[cat.Name] = amount;
+                total += amount;
             }
+            row["total"] = total;
             data.Add(row);
         }
 

@@ -9,7 +9,8 @@ public sealed class Expense : Entity
     public decimal Amount { get; set; }
     public required string Description { get; set; }
     public Guid? CategoryId { get; set; }
-    public Guid? Source { get; set; }
+    public Guid? PaycheckId { get; set; }
+    public Guid? InvoiceId { get; set; }
 
     // Recurrence
     public RecurrenceRule? RecurrenceRule { get; set; }
@@ -21,10 +22,9 @@ public sealed class Expense : Entity
 
     [JsonIgnore]
     public User User { get; set; } = null!;
-    [JsonIgnore]
     public ExpenseCategory? Category { get; set; }
-    [JsonIgnore]
     public Paycheck? Paycheck { get; set; }
+    public Invoice? Invoice { get; set; }
     [JsonIgnore]
     public Expense? RecurringExpense { get; set; }
     [JsonIgnore]

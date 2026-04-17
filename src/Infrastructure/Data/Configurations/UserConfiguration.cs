@@ -27,5 +27,15 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
 
         builder.HasIndex(u => u.Email)
             .IsUnique();
+
+        builder.Property(u => u.Country)
+            .IsRequired()
+            .HasMaxLength(8)
+            .HasDefaultValue("row");
+
+        builder.HasOne(u => u.ArgentinaProfile)
+            .WithOne(p => p.User)
+            .HasForeignKey<ArgentinaUserProfile>(p => p.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

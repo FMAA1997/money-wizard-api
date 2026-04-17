@@ -7,4 +7,5 @@ public interface IAuthService
 {
     Task<ErrorOr<UserResponse>> Sync(CancellationToken cancellationToken = default);
     Task<ErrorOr<UserResponse>> Register(string? externalId, string? email, string name, DateOnly dateOfBirth, CancellationToken cancellationToken = default);
+    Task<ErrorOr<UserResponse>> UpdateCountry(string country, CancellationToken cancellationToken = default);
 }

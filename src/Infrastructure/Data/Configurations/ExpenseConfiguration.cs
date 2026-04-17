@@ -29,7 +29,12 @@ public sealed class ExpenseConfiguration : IEntityTypeConfiguration<Expense>
 
         builder.HasOne(e => e.Paycheck)
             .WithMany(p => p.Expenses)
-            .HasForeignKey(e => e.Source)
+            .HasForeignKey(e => e.PaycheckId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        builder.HasOne(e => e.Invoice)
+            .WithMany(i => i.Expenses)
+            .HasForeignKey(e => e.InvoiceId)
             .OnDelete(DeleteBehavior.SetNull);
 
         // Recurrence rule (owned type — columns on same table)

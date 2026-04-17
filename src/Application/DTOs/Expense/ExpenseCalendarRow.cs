@@ -19,4 +19,5 @@ public sealed record ExpenseCategoryInfo(
 public sealed record ExpenseSourceInfo(
     Guid Id,
     string Description,
-    decimal Amount);
+    decimal Amount,
+    string Type);

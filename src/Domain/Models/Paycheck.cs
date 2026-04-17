@@ -20,7 +20,7 @@ public sealed class Paycheck : Entity
     [JsonIgnore]
     public User User { get; set; } = null!;
     [JsonIgnore]
-    public ICollection<PaycheckDistribution> Distributions { get; set; } = [];
+    public ICollection<Invoice> Invoices { get; set; } = [];
     [JsonIgnore]
     public ICollection<Expense> Expenses { get; set; } = [];
     [JsonIgnore]

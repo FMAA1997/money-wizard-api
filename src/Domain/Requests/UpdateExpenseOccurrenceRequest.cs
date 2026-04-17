@@ -5,4 +5,5 @@ public sealed record UpdateExpenseOccurrenceRequest(
     decimal? Amount,
     string? Description,
     Guid? CategoryId,
-    Guid? Source);
+    Guid? PaycheckId,
+    Guid? InvoiceId);

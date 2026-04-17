@@ -12,13 +12,18 @@ namespace Application.Tests.Services;
 public class AuthServiceTests
 {
     private readonly Mock<IUserRepository> _repositoryMock = new();
+    private readonly Mock<IArgentinaUserProfileRepository> _argentinaProfileRepositoryMock = new();
     private readonly Mock<ICurrentUserProvider> _currentUserProviderMock = new();
     private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
     private readonly AuthService _sut;
 
     public AuthServiceTests()
     {
-        _sut = new AuthService(_repositoryMock.Object, _currentUserProviderMock.Object, _unitOfWorkMock.Object);
+        _sut = new AuthService(
+            _repositoryMock.Object,
+            _argentinaProfileRepositoryMock.Object,
+            _currentUserProviderMock.Object,
+            _unitOfWorkMock.Object);
     }
 
     [Fact]

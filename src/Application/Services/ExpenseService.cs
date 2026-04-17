@@ -60,13 +60,17 @@ public sealed class ExpenseService(
                         mg => (IReadOnlyList<ExpenseResponse>)[.. mg.OrderBy(o => o.Date)]);
 
                 var category = seriesEntity?.Category;
-                var source = seriesEntity?.Paycheck;
+                var source = seriesEntity?.Paycheck is not null
+                    ? new ExpenseSourceInfo(seriesEntity.Paycheck.Id, seriesEntity.Paycheck.Description, seriesEntity.Paycheck.Amount, "Paycheck")
+                    : seriesEntity?.Invoice is not null
+                    ? new ExpenseSourceInfo(seriesEntity.Invoice.Id, seriesEntity.Invoice.Description, seriesEntity.Invoice.Amount, "Invoice")
+                    : null;
 
                 return new ExpenseCalendarRow(
                     ExpenseId: g.Key,
                     Description: first.Description,
                     Category: category is null ? null : new ExpenseCategoryInfo(category.Id, category.Name, category.Color),
-                    Source: source is null ? null : new ExpenseSourceInfo(source.Id, source.Description, source.Amount),
+                    Source: source,
                     IsRecurring: first.IsRecurring,
                     Recurrence: first.Recurrence,
                     Occurrences: monthDict);
@@ -109,7 +113,8 @@ public sealed class ExpenseService(
             Amount = request.Amount,
             Description = request.Description,
             CategoryId = request.CategoryId,
-            Source = request.Source,
+            PaycheckId = request.PaycheckId,
+            InvoiceId = request.InvoiceId,
             RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
             {
                 Frequency = request.Recurrence.Frequency,
@@ -143,7 +148,8 @@ public sealed class ExpenseService(
         expense.Amount = request.Amount;
         expense.Description = request.Description;
         expense.CategoryId = request.CategoryId;
-        expense.Source = request.Source;
+        expense.PaycheckId = request.PaycheckId;
+        expense.InvoiceId = request.InvoiceId;
         expense.RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
         {
             Frequency = request.Recurrence.Frequency,
@@ -189,7 +195,8 @@ public sealed class ExpenseService(
             existing.Amount = request.Amount ?? series.Amount;
             existing.Description = request.Description ?? series.Description;
             existing.CategoryId = request.CategoryId ?? series.CategoryId;
-            existing.Source = request.Source ?? series.Source;
+            existing.PaycheckId = request.PaycheckId ?? series.PaycheckId;
+            existing.InvoiceId = request.InvoiceId ?? series.InvoiceId;
             existing.IsDeleted = false;
 
             expenseRepository.Update(existing);
@@ -205,7 +212,8 @@ public sealed class ExpenseService(
             Amount = request.Amount ?? series.Amount,
             Description = request.Description ?? series.Description,
             CategoryId = request.CategoryId ?? series.CategoryId,
-            Source = request.Source ?? series.Source,
+            PaycheckId = request.PaycheckId ?? series.PaycheckId,
+            InvoiceId = request.InvoiceId ?? series.InvoiceId,
             RecurringExpenseId = id,
             OriginalDate = date
         };
@@ -255,7 +263,8 @@ public sealed class ExpenseService(
             Amount = request.Amount,
             Description = request.Description,
             CategoryId = request.CategoryId,
-            Source = request.Source,
+            PaycheckId = request.PaycheckId,
+            InvoiceId = request.InvoiceId,
             RecurrenceRule = recurrence is null ? null : new RecurrenceRule
             {
                 Frequency = recurrence.Frequency,
@@ -389,7 +398,8 @@ public sealed class ExpenseService(
             Amount: expense.Amount,
             Description: expense.Description,
             CategoryId: expense.CategoryId,
-            Source: expense.Source,
+            PaycheckId: expense.PaycheckId,
+            InvoiceId: expense.InvoiceId,
             IsRecurring: false,
             RecurringExpenseId: null,
             OriginalDate: null,
@@ -405,7 +415,8 @@ public sealed class ExpenseService(
             Amount: series.Amount,
             Description: series.Description,
             CategoryId: series.CategoryId,
-            Source: series.Source,
+            PaycheckId: series.PaycheckId,
+            InvoiceId: series.InvoiceId,
             IsRecurring: true,
             RecurringExpenseId: series.Id,
             OriginalDate: null,
@@ -426,7 +437,8 @@ public sealed class ExpenseService(
             Amount: exception.Amount,
             Description: exception.Description,
             CategoryId: exception.CategoryId,
-            Source: exception.Source,
+            PaycheckId: exception.PaycheckId,
+            InvoiceId: exception.InvoiceId,
             IsRecurring: true,
             RecurringExpenseId: exception.RecurringExpenseId,
             OriginalDate: exception.OriginalDate,

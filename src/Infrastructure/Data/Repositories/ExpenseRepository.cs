@@ -28,6 +28,7 @@ public sealed class ExpenseRepository(MoneyWizardContext context) : IExpenseRepo
         => await context.Expenses
             .Include(e => e.Category)
             .Include(e => e.Paycheck)
+            .Include(e => e.Invoice)
             .Where(e => e.UserId == userId
                 && (
                     (e.Date >= startDate && e.Date <= endDate)
