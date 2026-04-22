@@ -15,6 +15,8 @@ public static class DependencyInjection
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<IExpenseCategoryService, ExpenseCategoryService>();
         services.AddScoped<IInvoiceCategoryService, InvoiceCategoryService>();
+        services.AddScoped<IInvestmentService, InvestmentService>();
+        services.AddScoped<IInvestmentCatalogService, InvestmentCatalogService>();
         services.AddScoped<IPaycheckStatisticsService, PaycheckStatisticsService>();
         services.AddScoped<IExpenseStatisticsService, ExpenseStatisticsService>();
         services.AddScoped<IInvoiceStatisticsService, InvoiceStatisticsService>();

@@ -19,5 +19,7 @@ public sealed class User : Entity
     [JsonIgnore]
     public ICollection<ExpenseCategory> ExpenseCategories { get; set; } = [];
     [JsonIgnore]
+    public ICollection<Investment> Investments { get; set; } = [];
+    [JsonIgnore]
     public ArgentinaUserProfile? ArgentinaProfile { get; set; }
 }
