@@ -8,9 +8,9 @@ namespace Application.Abstractions.Services;
 
 public interface IPaycheckService
 {
-    Task<ErrorOr<IReadOnlyList<Paycheck>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
+    Task<ErrorOr<IReadOnlyList<PaycheckDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
     Task<ErrorOr<CalendarResponse<PaycheckCalendarRow>>> GetCalendar(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
-    Task<ErrorOr<Paycheck>> GetById(Guid id, CancellationToken cancellationToken = default);
+    Task<ErrorOr<PaycheckDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default);
     Task<ErrorOr<Paycheck>> Create(CreatePaycheckRequest request, CancellationToken cancellationToken = default);
     Task<ErrorOr<Paycheck>> Update(Guid id, UpdatePaycheckRequest request, CancellationToken cancellationToken = default);
     Task<ErrorOr<Deleted>> Delete(Guid id, CancellationToken cancellationToken = default);

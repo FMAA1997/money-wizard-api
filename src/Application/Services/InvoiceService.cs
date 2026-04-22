@@ -15,24 +15,32 @@ namespace Application.Services;
 public sealed class InvoiceService(
     IInvoiceRepository invoiceRepository,
     ICurrentUserProvider currentUserProvider,
-    IUnitOfWork unitOfWork) : IInvoiceService
+    IUnitOfWork unitOfWork,
+    IExchangeRateCache exchangeRateCache,
+    IUserCurrencyContext userCurrencyContext) : IInvoiceService
 {
-    public async Task<ErrorOr<IReadOnlyList<Invoice>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<IReadOnlyList<InvoiceDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
         var invoices = await invoiceRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-        return invoices.ToList();
+        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
+        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+
+        return invoices.Select(i => MapEntityDetail(i, lookup, displayCurrencies)).ToList();
     }
 
-    public async Task<ErrorOr<Invoice>> GetById(Guid id, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<InvoiceDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default)
     {
         var invoice = await invoiceRepository.GetById(id, cancellationToken);
         if (invoice is null || invoice.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        return invoice;
+        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
+        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+
+        return MapEntityDetail(invoice, lookup, displayCurrencies);
     }
 
     public async Task<ErrorOr<Invoice>> Create(CreateInvoiceRequest request, CancellationToken cancellationToken = default)
@@ -50,6 +58,7 @@ public sealed class InvoiceService(
             UserId = currentUserProvider.UserId,
             Date = request.Date,
             Amount = request.Amount,
+            Currency = request.Currency,
             Description = request.Description,
             Source = request.Source,
             RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
@@ -83,6 +92,7 @@ public sealed class InvoiceService(
 
         invoice.Date = request.Date;
         invoice.Amount = request.Amount;
+        invoice.Currency = request.Currency;
         invoice.Description = request.Description;
         invoice.Source = request.Source;
         invoice.RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
@@ -124,10 +134,14 @@ public sealed class InvoiceService(
         var existing = await invoiceRepository.GetException(id, date, cancellationToken);
         var occurrenceIndex = RecurrenceExpander.GetOccurrenceIndex(series.Date, series.RecurrenceRule, date);
 
+        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
+        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
+
         if (existing is not null)
         {
             existing.Date = request.Date ?? date;
             existing.Amount = request.Amount ?? series.Amount;
+            existing.Currency = request.Currency ?? series.Currency;
             existing.Description = request.Description ?? series.Description;
             existing.Source = request.Source ?? series.Source;
             existing.IsDeleted = false;
@@ -135,7 +149,7 @@ public sealed class InvoiceService(
             invoiceRepository.Update(existing);
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
-            return MapOverride(existing, series, occurrenceIndex);
+            return MapOverride(existing, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
         }
 
         var exception = new Invoice
@@ -143,6 +157,7 @@ public sealed class InvoiceService(
             UserId = currentUserProvider.UserId,
             Date = request.Date ?? date,
             Amount = request.Amount ?? series.Amount,
+            Currency = request.Currency ?? series.Currency,
             Description = request.Description ?? series.Description,
             Source = request.Source ?? series.Source,
             RecurringInvoiceId = id,
@@ -152,7 +167,7 @@ public sealed class InvoiceService(
         await invoiceRepository.Add(exception, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapOverride(exception, series, occurrenceIndex);
+        return MapOverride(exception, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
     }
 
     public async Task<ErrorOr<Invoice>> UpdateFromDate(Guid id, DateOnly date, UpdateInvoiceRequest request, CancellationToken cancellationToken = default)
@@ -184,6 +199,7 @@ public sealed class InvoiceService(
             UserId = currentUserProvider.UserId,
             Date = request.Date,
             Amount = request.Amount,
+            Currency = request.Currency,
             Description = request.Description,
             Source = request.Source,
             RecurrenceRule = recurrence is null ? null : new RecurrenceRule
@@ -225,6 +241,7 @@ public sealed class InvoiceService(
                 UserId = currentUserProvider.UserId,
                 Date = date,
                 Amount = series.Amount,
+                Currency = series.Currency,
                 Description = series.Description,
                 RecurringInvoiceId = id,
                 OriginalDate = date,
@@ -272,7 +289,7 @@ public sealed class InvoiceService(
 
         var invoices = await invoiceRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
 
-        var occurrences = ExpandOccurrences(invoices, startDate, endDate);
+        var occurrences = await ExpandOccurrences(invoices, startDate, endDate, cancellationToken);
 
         var invoiceLookup = invoices.ToDictionary(i => i.Id);
 
@@ -310,16 +327,15 @@ public sealed class InvoiceService(
             .ToList();
 
         var totals = months
-            .Select(m => rows
+            .Select(m => SumByCurrency(rows
                 .Where(r => r.Occurrences.ContainsKey(m))
-                .SelectMany(r => r.Occurrences[m])
-                .Sum(o => o.Amount))
+                .SelectMany(r => r.Occurrences[m])))
             .ToList();
 
         return new CalendarResponse<InvoiceCalendarRow>(months, rows, totals);
     }
 
-    private static List<InvoiceResponse> ExpandOccurrences(IReadOnlyList<Invoice> invoices, DateOnly startDate, DateOnly endDate)
+    private async Task<List<InvoiceResponse>> ExpandOccurrences(IReadOnlyList<Invoice> invoices, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken)
     {
         var oneOffs = new List<Invoice>();
         var series = new List<Invoice>();
@@ -335,9 +351,15 @@ public sealed class InvoiceService(
                 oneOffs.Add(i);
         }
 
-        var results = oneOffs
-            .Select(MapOneOff)
-            .ToList();
+        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
+        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
+        var displayCurrencies = currencyProfile.DisplayCurrencies;
+        var results = new List<InvoiceResponse>();
+
+        foreach (var oneOff in oneOffs)
+        {
+            results.Add(MapOneOff(oneOff, lookup, displayCurrencies));
+        }
 
         foreach (var s in series)
         {
@@ -351,11 +373,11 @@ public sealed class InvoiceService(
                     if (exception.IsDeleted)
                         continue;
 
-                    results.Add(MapOverride(exception, s, index));
+                    results.Add(MapOverride(exception, s, index, lookup, displayCurrencies));
                 }
                 else
                 {
-                    results.Add(MapVirtual(s, date, index));
+                    results.Add(MapVirtual(s, date, index, lookup, displayCurrencies));
                 }
             }
         }
@@ -364,11 +386,42 @@ public sealed class InvoiceService(
         return results;
     }
 
-    private static InvoiceResponse MapOneOff(Invoice invoice) =>
+    private static IReadOnlyDictionary<string, decimal> SumByCurrency(IEnumerable<InvoiceResponse> occurrences)
+    {
+        var totals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var occurrence in occurrences)
+        {
+            foreach (var (currency, amount) in occurrence.Amounts)
+            {
+                totals[currency] = totals.GetValueOrDefault(currency) + amount;
+            }
+        }
+        return totals;
+    }
+
+    private static InvoiceDetailResponse MapEntityDetail(Invoice invoice, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+        new(
+            Id: invoice.Id,
+            UserId: invoice.UserId,
+            Date: invoice.Date,
+            Amount: invoice.Amount,
+            Currency: invoice.Currency,
+            Description: invoice.Description,
+            Source: invoice.Source,
+            RecurrenceRule: invoice.RecurrenceRule,
+            RecurringInvoiceId: invoice.RecurringInvoiceId,
+            OriginalDate: invoice.OriginalDate,
+            IsDeleted: invoice.IsDeleted,
+            Paycheck: invoice.Paycheck,
+            Amounts: lookup.ConvertToAll(invoice.Amount, invoice.Currency, displayCurrencies, invoice.Date));
+
+    private static InvoiceResponse MapOneOff(Invoice invoice, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
         new(
             Id: invoice.Id,
             Date: invoice.Date,
             Amount: invoice.Amount,
+            Currency: invoice.Currency,
+            Amounts: lookup.ConvertToAll(invoice.Amount, invoice.Currency, displayCurrencies, invoice.Date),
             Description: invoice.Description,
             Source: invoice.Source,
             IsRecurring: false,
@@ -379,11 +432,13 @@ public sealed class InvoiceService(
             InstallmentNumber: null,
             TotalInstallments: null);
 
-    private static InvoiceResponse MapVirtual(Invoice series, DateOnly date, int occurrenceIndex) =>
+    private static InvoiceResponse MapVirtual(Invoice series, DateOnly date, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
         new(
             Id: series.Id,
             Date: date,
             Amount: series.Amount,
+            Currency: series.Currency,
+            Amounts: lookup.ConvertToAll(series.Amount, series.Currency, displayCurrencies, date),
             Description: series.Description,
             Source: series.Source,
             IsRecurring: true,
@@ -399,11 +454,13 @@ public sealed class InvoiceService(
             InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
             TotalInstallments: series.RecurrenceRule.TotalInstallments);
 
-    private static InvoiceResponse MapOverride(Invoice exception, Invoice series, int occurrenceIndex) =>
+    private static InvoiceResponse MapOverride(Invoice exception, Invoice series, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
         new(
             Id: exception.Id,
             Date: exception.Date,
             Amount: exception.Amount,
+            Currency: exception.Currency,
+            Amounts: lookup.ConvertToAll(exception.Amount, exception.Currency, displayCurrencies, exception.Date),
             Description: exception.Description,
             Source: exception.Source,
             IsRecurring: true,

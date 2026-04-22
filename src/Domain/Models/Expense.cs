@@ -7,6 +7,7 @@ public sealed class Expense : Entity
     public Guid UserId { get; set; }
     public DateOnly Date { get; set; }
     public decimal Amount { get; set; }
+    public required string Currency { get; set; }
     public required string Description { get; set; }
     public Guid? CategoryId { get; set; }
     public Guid? PaycheckId { get; set; }

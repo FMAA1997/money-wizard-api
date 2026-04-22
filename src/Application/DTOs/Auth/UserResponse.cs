@@ -8,4 +8,6 @@ public sealed record UserResponse(
     string Email,
     DateOnly DateOfBirth,
     string Country,
+    IReadOnlyList<string> DisplayCurrencies,
+    string PrimaryCurrency,
     ArgentinaProfileResponse? ArgentinaProfile);

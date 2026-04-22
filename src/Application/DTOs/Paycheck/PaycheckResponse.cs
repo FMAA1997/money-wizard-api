@@ -6,6 +6,8 @@ public sealed record PaycheckResponse(
     Guid Id,
     DateOnly Date,
     decimal Amount,
+    string Currency,
+    IReadOnlyDictionary<string, decimal> Amounts,
     string Description,
     bool IsRecurring,
     Guid? RecurringPaycheckId,

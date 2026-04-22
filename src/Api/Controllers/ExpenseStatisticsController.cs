@@ -49,4 +49,12 @@ public sealed class ExpenseStatisticsController(IExpenseStatisticsService expens
             month,
             cancellationToken
         ));
+
+    [HttpGet("flow")]
+    public async Task<ActionResult<ExpenseFlow>> GetExpenseFlow([FromQuery] int? year = null, [FromQuery] int? month = null, CancellationToken cancellationToken = default) =>
+        MatchOk(await expenseStatisticsService.GetExpenseFlow(
+            year ?? DateTime.UtcNow.Year,
+            month,
+            cancellationToken
+        ));
 }

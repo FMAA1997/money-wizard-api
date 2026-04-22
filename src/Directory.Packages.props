@@ -11,6 +11,10 @@
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
     <!-- DI Abstractions -->
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
+    <!-- HTTP + Logging -->
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
     <!-- Api -->
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="8.0.22" />
     <PackageVersion Include="Swashbuckle.AspNetCore" Version="6.6.2" />

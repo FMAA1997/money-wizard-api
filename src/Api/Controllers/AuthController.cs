@@ -22,15 +22,8 @@ public sealed class AuthController(IAuthService authService) : ErrorController
             await authService.Register(
                 User.FindFirstValue("user_id"),
                 User.FindFirstValue(ClaimTypes.Email) ?? User.FindFirstValue("email"),
-                request.Name,
-                request.DateOfBirth,
+                request,
                 cancellationToken
             )
         );
-
-    [HttpPatch("country")]
-    public async Task<ActionResult<UserResponse>> UpdateCountry(
-        [FromBody] UpdateCountryRequest request,
-        CancellationToken cancellationToken)
-        => MatchOk(await authService.UpdateCountry(request.Country, cancellationToken));
 }

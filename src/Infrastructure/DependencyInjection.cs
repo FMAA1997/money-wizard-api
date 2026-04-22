@@ -3,6 +3,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Infrastructure.Data;
 using Microsoft.AspNetCore.Builder;
+using Application.Abstractions.Services;
+using Domain.Abstractions.Clients;
+using Infrastructure.Clients;
+using Infrastructure.Services;
 
 namespace Infrastructure;
 
@@ -24,6 +28,26 @@ public static class DependencyInjection
         services.AddScoped<Domain.Abstractions.Repositories.IExpenseCategoryRepository, Data.Repositories.ExpenseCategoryRepository>();
         services.AddScoped<Domain.Abstractions.Repositories.IInvoiceCategoryRepository, Data.Repositories.InvoiceCategoryRepository>();
         services.AddScoped<Domain.Abstractions.Repositories.IArgentinaUserProfileRepository, Data.Repositories.ArgentinaUserProfileRepository>();
+
+        services.AddExchangeRates(configuration);
+
+        return services;
+    }
+
+    private static IServiceCollection AddExchangeRates(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var baseAddress = configuration["ExchangeRates:ArgentinaDatos:BaseAddress"]
+            ?? "https://api.argentinadatos.com/";
+
+        services.AddHttpClient<IExchangeRateClient, ArgentinaDatosExchangeRateClient>(client =>
+        {
+            client.BaseAddress = new Uri(baseAddress);
+            client.Timeout = TimeSpan.FromSeconds(30);
+        });
+
+        services.AddSingleton<IExchangeRateCache, ExchangeRateCache>();
 
         return services;
     }

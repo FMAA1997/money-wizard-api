@@ -13,7 +13,7 @@ namespace Api.Controllers;
 public sealed class InvoicesController(IInvoiceService invoiceService) : ErrorController
 {
     [HttpGet]
-    public async Task<ActionResult<IReadOnlyList<Invoice>>> GetAll(
+    public async Task<ActionResult<IReadOnlyList<InvoiceDetailResponse>>> GetAll(
         [FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate, CancellationToken cancellationToken)
         => MatchOk(await invoiceService.GetAllInRange(startDate, endDate, cancellationToken));
 
@@ -23,7 +23,7 @@ public sealed class InvoicesController(IInvoiceService invoiceService) : ErrorCo
         => MatchOk(await invoiceService.GetCalendar(startDate, endDate, cancellationToken));
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Invoice>> GetById(Guid id, CancellationToken cancellationToken)
+    public async Task<ActionResult<InvoiceDetailResponse>> GetById(Guid id, CancellationToken cancellationToken)
         => MatchOk(await invoiceService.GetById(id, cancellationToken));
 
     [HttpPost]

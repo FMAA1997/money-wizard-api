@@ -6,6 +6,8 @@ public sealed record InvoiceResponse(
     Guid Id,
     DateOnly Date,
     decimal Amount,
+    string Currency,
+    IReadOnlyDictionary<string, decimal> Amounts,
     string Description,
     Guid? Source,
     bool IsRecurring,

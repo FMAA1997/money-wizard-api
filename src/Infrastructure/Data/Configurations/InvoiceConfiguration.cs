@@ -13,6 +13,10 @@ public sealed class InvoiceConfiguration : IEntityTypeConfiguration<Invoice>
         builder.Property(i => i.Amount)
             .HasPrecision(18, 2);
 
+        builder.Property(i => i.Currency)
+            .IsRequired()
+            .HasMaxLength(3);
+
         builder.Property(i => i.Description)
             .IsRequired()
             .HasMaxLength(500);

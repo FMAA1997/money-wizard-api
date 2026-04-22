@@ -8,9 +8,9 @@ namespace Application.Abstractions.Services;
 
 public interface IInvoiceService
 {
-    Task<ErrorOr<IReadOnlyList<Invoice>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
+    Task<ErrorOr<IReadOnlyList<InvoiceDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
     Task<ErrorOr<CalendarResponse<InvoiceCalendarRow>>> GetCalendar(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
-    Task<ErrorOr<Invoice>> GetById(Guid id, CancellationToken cancellationToken = default);
+    Task<ErrorOr<InvoiceDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default);
     Task<ErrorOr<Invoice>> Create(CreateInvoiceRequest request, CancellationToken cancellationToken = default);
     Task<ErrorOr<Invoice>> Update(Guid id, UpdateInvoiceRequest request, CancellationToken cancellationToken = default);
     Task<ErrorOr<Deleted>> Delete(Guid id, CancellationToken cancellationToken = default);

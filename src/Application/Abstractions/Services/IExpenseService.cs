@@ -8,9 +8,9 @@ namespace Application.Abstractions.Services;
 
 public interface IExpenseService
 {
-    Task<ErrorOr<IReadOnlyList<Expense>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
+    Task<ErrorOr<IReadOnlyList<ExpenseDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
     Task<ErrorOr<CalendarResponse<ExpenseCalendarRow>>> GetCalendar(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
-    Task<ErrorOr<Expense>> GetById(Guid id, CancellationToken cancellationToken = default);
+    Task<ErrorOr<ExpenseDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default);
     Task<ErrorOr<Expense>> Create(CreateExpenseRequest request, CancellationToken cancellationToken = default);
     Task<ErrorOr<Expense>> Update(Guid id, UpdateExpenseRequest request, CancellationToken cancellationToken = default);
     Task<ErrorOr<Deleted>> Delete(Guid id, CancellationToken cancellationToken = default);

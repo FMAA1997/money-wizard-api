@@ -1,3 +1,6 @@
+using Application.Abstractions.Services;
+using Application.Services;
+using Application.Services.CountryHandlers;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Application;
@@ -6,15 +9,22 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
-        services.AddScoped<Abstractions.Services.IAuthService, Services.AuthService>();
-        services.AddScoped<Abstractions.Services.IPaycheckService, Services.PaycheckService>();
-        services.AddScoped<Abstractions.Services.IInvoiceService, Services.InvoiceService>();
-        services.AddScoped<Abstractions.Services.IExpenseService, Services.ExpenseService>();
-        services.AddScoped<Abstractions.Services.IExpenseCategoryService, Services.ExpenseCategoryService>();
-        services.AddScoped<Abstractions.Services.IInvoiceCategoryService, Services.InvoiceCategoryService>();
-        services.AddScoped<Abstractions.Services.IPaycheckStatisticsService, Services.PaycheckStatisticsService>();
-        services.AddScoped<Abstractions.Services.IExpenseStatisticsService, Services.ExpenseStatisticsService>();
-        services.AddScoped<Abstractions.Services.IArgentinaUserProfileService, Services.ArgentinaUserProfileService>();
+        services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IPaycheckService, PaycheckService>();
+        services.AddScoped<IInvoiceService, InvoiceService>();
+        services.AddScoped<IExpenseService, ExpenseService>();
+        services.AddScoped<IExpenseCategoryService, ExpenseCategoryService>();
+        services.AddScoped<IInvoiceCategoryService, InvoiceCategoryService>();
+        services.AddScoped<IPaycheckStatisticsService, PaycheckStatisticsService>();
+        services.AddScoped<IExpenseStatisticsService, ExpenseStatisticsService>();
+        services.AddScoped<IInvoiceStatisticsService, InvoiceStatisticsService>();
+
+        services.AddScoped<IProfileService, ProfileService>();
+        services.AddScoped<ICountryProfileRegistry, CountryProfileRegistry>();
+        services.AddScoped<IUserCurrencyContext, UserCurrencyContext>();
+        services.AddScoped<UserResponseAssembler>();
+        services.AddScoped<ICountryProfileHandler, ArgentinaCountryProfileHandler>();
+        services.AddScoped<ICountryProfileHandler, RowCountryProfileHandler>();
 
         return services;
     }

@@ -15,15 +15,20 @@ namespace Application.Services;
 public sealed class ExpenseService(
     IExpenseRepository expenseRepository,
     ICurrentUserProvider currentUserProvider,
-    IUnitOfWork unitOfWork) : IExpenseService
+    IUnitOfWork unitOfWork,
+    IExchangeRateCache exchangeRateCache,
+    IUserCurrencyContext userCurrencyContext) : IExpenseService
 {
-    public async Task<ErrorOr<IReadOnlyList<Expense>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<IReadOnlyList<ExpenseDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
         var expenses = await expenseRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-        return expenses.ToList();
+        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
+        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+
+        return expenses.Select(e => MapEntityDetail(e, lookup, displayCurrencies)).ToList();
     }
 
     public async Task<ErrorOr<CalendarResponse<ExpenseCalendarRow>>> GetCalendar(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
@@ -33,9 +38,8 @@ public sealed class ExpenseService(
 
         var expenses = await expenseRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
 
-        var occurrences = ExpandOccurrences(expenses, startDate, endDate);
+        var occurrences = await ExpandOccurrences(expenses, startDate, endDate, cancellationToken);
 
-        // Build lookup from expense entities for category/source navigation properties
         var expenseLookup = expenses.ToDictionary(e => e.Id);
 
         var months = new List<string>();
@@ -78,22 +82,24 @@ public sealed class ExpenseService(
             .ToList();
 
         var totals = months
-            .Select(m => rows
+            .Select(m => SumByCurrency(rows
                 .Where(r => r.Occurrences.ContainsKey(m))
-                .SelectMany(r => r.Occurrences[m])
-                .Sum(o => o.Amount))
+                .SelectMany(r => r.Occurrences[m])))
             .ToList();
 
         return new CalendarResponse<ExpenseCalendarRow>(months, rows, totals);
     }
 
-    public async Task<ErrorOr<Expense>> GetById(Guid id, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<ExpenseDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default)
     {
         var expense = await expenseRepository.GetById(id, cancellationToken);
         if (expense is null || expense.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
 
-        return expense;
+        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
+        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+
+        return MapEntityDetail(expense, lookup, displayCurrencies);
     }
 
     public async Task<ErrorOr<Expense>> Create(CreateExpenseRequest request, CancellationToken cancellationToken = default)
@@ -111,6 +117,7 @@ public sealed class ExpenseService(
             UserId = currentUserProvider.UserId,
             Date = request.Date,
             Amount = request.Amount,
+            Currency = request.Currency,
             Description = request.Description,
             CategoryId = request.CategoryId,
             PaycheckId = request.PaycheckId,
@@ -146,6 +153,7 @@ public sealed class ExpenseService(
 
         expense.Date = request.Date;
         expense.Amount = request.Amount;
+        expense.Currency = request.Currency;
         expense.Description = request.Description;
         expense.CategoryId = request.CategoryId;
         expense.PaycheckId = request.PaycheckId;
@@ -189,10 +197,14 @@ public sealed class ExpenseService(
         var existing = await expenseRepository.GetException(id, date, cancellationToken);
         var occurrenceIndex = RecurrenceExpander.GetOccurrenceIndex(series.Date, series.RecurrenceRule, date);
 
+        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
+        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
+
         if (existing is not null)
         {
             existing.Date = request.Date ?? date;
             existing.Amount = request.Amount ?? series.Amount;
+            existing.Currency = request.Currency ?? series.Currency;
             existing.Description = request.Description ?? series.Description;
             existing.CategoryId = request.CategoryId ?? series.CategoryId;
             existing.PaycheckId = request.PaycheckId ?? series.PaycheckId;
@@ -202,7 +214,7 @@ public sealed class ExpenseService(
             expenseRepository.Update(existing);
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
-            return MapOverride(existing, series, occurrenceIndex);
+            return MapOverride(existing, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
         }
 
         var exception = new Expense
@@ -210,6 +222,7 @@ public sealed class ExpenseService(
             UserId = currentUserProvider.UserId,
             Date = request.Date ?? date,
             Amount = request.Amount ?? series.Amount,
+            Currency = request.Currency ?? series.Currency,
             Description = request.Description ?? series.Description,
             CategoryId = request.CategoryId ?? series.CategoryId,
             PaycheckId = request.PaycheckId ?? series.PaycheckId,
@@ -221,7 +234,7 @@ public sealed class ExpenseService(
         await expenseRepository.Add(exception, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapOverride(exception, series, occurrenceIndex);
+        return MapOverride(exception, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
     }
 
     public async Task<ErrorOr<Expense>> UpdateFromDate(Guid id, DateOnly date, UpdateExpenseRequest request, CancellationToken cancellationToken = default)
@@ -237,11 +250,9 @@ public sealed class ExpenseService(
         if (request.Recurrence is not null && request.Recurrence.Interval < 1)
             return RecurrenceErrors.InvalidInterval;
 
-        // End the old series before the split date
         var previousDate = RecurrenceExpander.GetPreviousOccurrence(series.Date, series.RecurrenceRule, date);
         series.RecurrenceRule.EndDate = previousDate;
 
-        // If no previous occurrence exists, the series starts at or after the split date — delete entirely
         if (previousDate is null)
         {
             expenseRepository.Delete(series);
@@ -251,16 +262,15 @@ public sealed class ExpenseService(
             expenseRepository.Update(series);
         }
 
-        // Re-parent exceptions from the split date forward to the new series
         await expenseRepository.DeleteExceptionsFromDate(id, date, cancellationToken);
 
-        // Create the new series
         var recurrence = request.Recurrence;
         var newSeries = new Expense
         {
             UserId = currentUserProvider.UserId,
             Date = request.Date,
             Amount = request.Amount,
+            Currency = request.Currency,
             Description = request.Description,
             CategoryId = request.CategoryId,
             PaycheckId = request.PaycheckId,
@@ -304,6 +314,7 @@ public sealed class ExpenseService(
                 UserId = currentUserProvider.UserId,
                 Date = date,
                 Amount = series.Amount,
+                Currency = series.Currency,
                 Description = series.Description,
                 RecurringExpenseId = id,
                 OriginalDate = date,
@@ -328,12 +339,10 @@ public sealed class ExpenseService(
 
         var previousDate = RecurrenceExpander.GetPreviousOccurrence(series.Date, series.RecurrenceRule, date);
 
-        // Delete future exceptions
         await expenseRepository.DeleteExceptionsFromDate(id, date, cancellationToken);
 
         if (previousDate is null)
         {
-            // Split date is the first occurrence — delete entire series
             expenseRepository.Delete(series);
         }
         else
@@ -346,7 +355,7 @@ public sealed class ExpenseService(
         return Result.Deleted;
     }
 
-    private static List<ExpenseResponse> ExpandOccurrences(IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate)
+    private async Task<List<ExpenseResponse>> ExpandOccurrences(IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken)
     {
         var oneOffs = new List<Expense>();
         var series = new List<Expense>();
@@ -362,9 +371,15 @@ public sealed class ExpenseService(
                 oneOffs.Add(e);
         }
 
-        var results = oneOffs
-            .Select(MapOneOff)
-            .ToList();
+        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
+        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
+        var displayCurrencies = currencyProfile.DisplayCurrencies;
+        var results = new List<ExpenseResponse>();
+
+        foreach (var oneOff in oneOffs)
+        {
+            results.Add(MapOneOff(oneOff, lookup, displayCurrencies));
+        }
 
         foreach (var s in series)
         {
@@ -378,11 +393,11 @@ public sealed class ExpenseService(
                     if (exception.IsDeleted)
                         continue;
 
-                    results.Add(MapOverride(exception, s, index));
+                    results.Add(MapOverride(exception, s, index, lookup, displayCurrencies));
                 }
                 else
                 {
-                    results.Add(MapVirtual(s, date, index));
+                    results.Add(MapVirtual(s, date, index, lookup, displayCurrencies));
                 }
             }
         }
@@ -391,11 +406,46 @@ public sealed class ExpenseService(
         return results;
     }
 
-    private static ExpenseResponse MapOneOff(Expense expense) =>
+    private static IReadOnlyDictionary<string, decimal> SumByCurrency(IEnumerable<ExpenseResponse> occurrences)
+    {
+        var totals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var occurrence in occurrences)
+        {
+            foreach (var (currency, amount) in occurrence.Amounts)
+            {
+                totals[currency] = totals.GetValueOrDefault(currency) + amount;
+            }
+        }
+        return totals;
+    }
+
+    private static ExpenseDetailResponse MapEntityDetail(Expense expense, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+        new(
+            Id: expense.Id,
+            UserId: expense.UserId,
+            Date: expense.Date,
+            Amount: expense.Amount,
+            Currency: expense.Currency,
+            Description: expense.Description,
+            CategoryId: expense.CategoryId,
+            PaycheckId: expense.PaycheckId,
+            InvoiceId: expense.InvoiceId,
+            RecurrenceRule: expense.RecurrenceRule,
+            RecurringExpenseId: expense.RecurringExpenseId,
+            OriginalDate: expense.OriginalDate,
+            IsDeleted: expense.IsDeleted,
+            Category: expense.Category,
+            Paycheck: expense.Paycheck,
+            Invoice: expense.Invoice,
+            Amounts: lookup.ConvertToAll(expense.Amount, expense.Currency, displayCurrencies, expense.Date));
+
+    private static ExpenseResponse MapOneOff(Expense expense, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
         new(
             Id: expense.Id,
             Date: expense.Date,
             Amount: expense.Amount,
+            Currency: expense.Currency,
+            Amounts: lookup.ConvertToAll(expense.Amount, expense.Currency, displayCurrencies, expense.Date),
             Description: expense.Description,
             CategoryId: expense.CategoryId,
             PaycheckId: expense.PaycheckId,
@@ -408,11 +458,13 @@ public sealed class ExpenseService(
             InstallmentNumber: null,
             TotalInstallments: null);
 
-    private static ExpenseResponse MapVirtual(Expense series, DateOnly date, int occurrenceIndex) =>
+    private static ExpenseResponse MapVirtual(Expense series, DateOnly date, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
         new(
             Id: series.Id,
             Date: date,
             Amount: series.Amount,
+            Currency: series.Currency,
+            Amounts: lookup.ConvertToAll(series.Amount, series.Currency, displayCurrencies, date),
             Description: series.Description,
             CategoryId: series.CategoryId,
             PaycheckId: series.PaycheckId,
@@ -430,11 +482,13 @@ public sealed class ExpenseService(
             InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
             TotalInstallments: series.RecurrenceRule.TotalInstallments);
 
-    private static ExpenseResponse MapOverride(Expense exception, Expense series, int occurrenceIndex) =>
+    private static ExpenseResponse MapOverride(Expense exception, Expense series, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
         new(
             Id: exception.Id,
             Date: exception.Date,
             Amount: exception.Amount,
+            Currency: exception.Currency,
+            Amounts: lookup.ConvertToAll(exception.Amount, exception.Currency, displayCurrencies, exception.Date),
             Description: exception.Description,
             CategoryId: exception.CategoryId,
             PaycheckId: exception.PaycheckId,

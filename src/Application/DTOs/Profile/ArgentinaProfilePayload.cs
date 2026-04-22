@@ -1,5 +1,5 @@
 namespace Application.DTOs.Profile;
 
-public sealed record UpsertArgentinaProfileRequest(
+public sealed record ArgentinaProfilePayload(
     string EmploymentStatus,
     Guid? MonotributoCategoryId);

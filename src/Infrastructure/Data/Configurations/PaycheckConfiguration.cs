@@ -13,6 +13,10 @@ public sealed class PaycheckConfiguration : IEntityTypeConfiguration<Paycheck>
         builder.Property(p => p.Amount)
             .HasPrecision(18, 2);
 
+        builder.Property(p => p.Currency)
+            .IsRequired()
+            .HasMaxLength(3);
+
         builder.Property(p => p.Description)
             .IsRequired()
             .HasMaxLength(500);

@@ -13,7 +13,7 @@ namespace Api.Controllers;
 public sealed class PaychecksController(IPaycheckService paycheckService) : ErrorController
 {
     [HttpGet]
-    public async Task<ActionResult<IReadOnlyList<Paycheck>>> GetAll(
+    public async Task<ActionResult<IReadOnlyList<PaycheckDetailResponse>>> GetAll(
         [FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate, CancellationToken cancellationToken)
         => MatchOk(await paycheckService.GetAllInRange(startDate, endDate, cancellationToken));
 
@@ -23,7 +23,7 @@ public sealed class PaychecksController(IPaycheckService paycheckService) : Erro
         => MatchOk(await paycheckService.GetCalendar(startDate, endDate, cancellationToken));
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Paycheck>> GetById(Guid id, CancellationToken cancellationToken)
+    public async Task<ActionResult<PaycheckDetailResponse>> GetById(Guid id, CancellationToken cancellationToken)
         => MatchOk(await paycheckService.GetById(id, cancellationToken));
 
     [HttpPost]

@@ -13,7 +13,7 @@ namespace Api.Controllers;
 public sealed class ExpenseController(IExpenseService expenseService) : ErrorController
 {
     [HttpGet]
-    public async Task<ActionResult<IReadOnlyList<Expense>>> GetAll(
+    public async Task<ActionResult<IReadOnlyList<ExpenseDetailResponse>>> GetAll(
         [FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate, CancellationToken cancellationToken)
         => MatchOk(await expenseService.GetAllInRange(startDate, endDate, cancellationToken));
 
@@ -23,7 +23,7 @@ public sealed class ExpenseController(IExpenseService expenseService) : ErrorCon
         => MatchOk(await expenseService.GetCalendar(startDate, endDate, cancellationToken));
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Expense>> GetById(Guid id, CancellationToken cancellationToken)
+    public async Task<ActionResult<ExpenseDetailResponse>> GetById(Guid id, CancellationToken cancellationToken)
         => MatchOk(await expenseService.GetById(id, cancellationToken));
 
     [HttpPost]
