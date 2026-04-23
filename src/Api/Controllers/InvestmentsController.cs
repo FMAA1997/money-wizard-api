@@ -24,7 +24,7 @@ public sealed class InvestmentsController(
     [HttpGet("catalog")]
     public async Task<ActionResult<IReadOnlyList<AssetSearchResultResponse>>> Search(
         [FromQuery] AssetClass assetClass,
-        [FromQuery] string q,
+        [FromQuery] string? q,
         CancellationToken cancellationToken)
         => MatchOk(await catalogService.Search(assetClass, q, cancellationToken));
 

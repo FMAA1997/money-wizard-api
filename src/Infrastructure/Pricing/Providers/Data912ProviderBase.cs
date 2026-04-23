@@ -13,6 +13,10 @@ internal abstract class Data912ProviderBase : IPriceProvider
 
     protected abstract string DefaultCurrency { get; }
 
+    // Tickers shown when the user hasn't typed anything yet. Order matters — results preserve this order.
+    // Tickers not present in the live snapshot are silently skipped so a bad hardcode never breaks the search.
+    protected virtual IReadOnlyList<string> FeaturedTickers => Array.Empty<string>();
+
     protected virtual string ResolveCurrency(string ticker)
     {
         if (string.IsNullOrEmpty(ticker)) return DefaultCurrency;
@@ -44,13 +48,20 @@ internal abstract class Data912ProviderBase : IPriceProvider
             return Array.Empty<AssetSearchResult>();
 
         var q = query?.Trim() ?? string.Empty;
-        IEnumerable<KeyValuePair<string, Data912Quote>> source = snapshot;
-        if (q.Length > 0)
+
+        if (q.Length == 0)
         {
-            source = source.Where(kvp => kvp.Key.Contains(q, StringComparison.OrdinalIgnoreCase));
+            var featured = new List<AssetSearchResult>(FeaturedTickers.Count);
+            foreach (var ticker in FeaturedTickers)
+            {
+                if (snapshot.ContainsKey(ticker))
+                    featured.Add(new AssetSearchResult(ticker, ticker, ResolveCurrency(ticker)));
+            }
+            return featured;
         }
 
-        return source
+        return snapshot
+            .Where(kvp => kvp.Key.Contains(q, StringComparison.OrdinalIgnoreCase))
             .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
             .Take(25)
             .Select(kvp => new AssetSearchResult(kvp.Key, kvp.Key, ResolveCurrency(kvp.Key)))

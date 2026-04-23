@@ -8,9 +8,6 @@ public sealed class Data912Client(HttpClient httpClient) : IData912Client
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
-    public Task<IReadOnlyList<Data912Quote>> GetUsStocks(CancellationToken cancellationToken = default) =>
-        FetchQuotes("live/usa_stocks", cancellationToken);
-
     public Task<IReadOnlyList<Data912Quote>> GetArgStocks(CancellationToken cancellationToken = default) =>
         FetchQuotes("live/arg_stocks", cancellationToken);
 

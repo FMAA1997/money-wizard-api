@@ -10,13 +10,18 @@ internal sealed class CoinGeckoCryptoProvider(ICoinGeckoClient client) : IPriceP
 {
     private static readonly TimeSpan ListTtl = TimeSpan.FromHours(24);
     private static readonly TimeSpan PriceTtl = TimeSpan.FromHours(24);
+    private static readonly TimeSpan FeaturedTtl = TimeSpan.FromHours(1);
+
+    private const int FeaturedLimit = 10;
 
     // Symbol (UPPER) → CoinGecko id
     private readonly TimedCache<IReadOnlyDictionary<string, string>> _symbolToId = new(ListTtl);
-    private readonly TimedCache<IReadOnlyList<CoinGeckoCoin>> _coinList = new(ListTtl);
 
     // CoinGecko id → USD price
     private readonly TimedCache<IReadOnlyDictionary<string, decimal>> _prices = new(PriceTtl);
+
+    // Top coins by market cap — used for empty-query search results.
+    private readonly TimedCache<IReadOnlyList<CoinGeckoCoin>> _featured = new(FeaturedTtl);
 
     // Seed with BTC/ETH so crypto pricing works without calling /coins/list first (it's huge).
     private static readonly IReadOnlyDictionary<string, string> SeedMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -50,28 +55,28 @@ internal sealed class CoinGeckoCryptoProvider(ICoinGeckoClient client) : IPriceP
 
     public async Task<ErrorOr<IReadOnlyList<AssetSearchResult>>> Search(string query, CancellationToken cancellationToken = default)
     {
-        var list = await _coinList.GetAsync(async ct => await client.ListCoins(ct), cancellationToken);
-        if (list is null)
+        var q = (query ?? string.Empty).Trim();
+
+        // Empty query → top coins by market cap (cached 1h). Falls back to a BTC/ETH seed if the upstream call fails.
+        if (q.Length == 0)
         {
-            // Seeded fallback — always support BTC/ETH.
-            var seeded = new List<AssetSearchResult>
+            var featured = await _featured.GetAsync(async ct => await client.GetTopCoinsByMarketCap(FeaturedLimit, ct), cancellationToken);
+            if (featured is { Count: > 0 })
+            {
+                return featured
+                    .Select(c => new AssetSearchResult(c.Symbol.ToUpperInvariant(), c.Name, "USD"))
+                    .ToList();
+            }
+
+            return new List<AssetSearchResult>
             {
                 new("BTC", "Bitcoin", "USD"),
                 new("ETH", "Ethereum", "USD")
             };
-            return FilterSeeded(seeded, query);
         }
 
-        var q = (query ?? string.Empty).Trim();
-        IEnumerable<CoinGeckoCoin> source = list;
-        if (q.Length > 0)
-        {
-            source = source.Where(c =>
-                c.Symbol.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                c.Name.Contains(q, StringComparison.OrdinalIgnoreCase));
-        }
-
-        return source
+        var coins = await client.SearchCoins(q, cancellationToken);
+        return coins
             .Take(25)
             .Select(c => new AssetSearchResult(c.Symbol.ToUpperInvariant(), c.Name, "USD"))
             .ToList();
@@ -99,13 +104,4 @@ internal sealed class CoinGeckoCryptoProvider(ICoinGeckoClient client) : IPriceP
     }
 
     private IEnumerable<string> InterestingIds() => SeedMap.Values;
-
-    private static List<AssetSearchResult> FilterSeeded(List<AssetSearchResult> seeded, string query)
-    {
-        var q = (query ?? string.Empty).Trim();
-        if (q.Length == 0) return seeded;
-        return seeded
-            .Where(s => s.Ticker.Contains(q, StringComparison.OrdinalIgnoreCase) || s.Description.Contains(q, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-    }
 }

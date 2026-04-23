@@ -4,18 +4,15 @@ using Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Add settings variables BEFORE service registration so anything that calls Bind at DI time sees the full merged config.
+builder.Configuration
+    .SetBasePath(builder.Environment.ContentRootPath)
+    .AddJsonFile($"appsettings.local.json", optional: true, reloadOnChange: true)
+    .AddJsonFile($"config/appsettings.json", optional: true, reloadOnChange: true);
+
 builder.Services
     .AddApplication()
     .AddInfrastructure(builder.Configuration);
-
-// Add settings variables.
-builder.Configuration
-    .SetBasePath(builder.Environment.ContentRootPath)
-    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
-    .AddJsonFile($"appsettings.local.json", optional: true, reloadOnChange: true)
-    .AddJsonFile($"config/appsettings.json", optional: true, reloadOnChange: true)
-    .AddEnvironmentVariables();
 
 var authentication = builder.Configuration.GetSection("Authentication");
 
@@ -55,6 +52,9 @@ builder.Services.AddScoped<Application.Abstractions.ICurrentUserProvider>(
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add<Api.Filters.ResolveCurrentUserFilter>();
+}).AddJsonOptions(options =>
+{
+    options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
 });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

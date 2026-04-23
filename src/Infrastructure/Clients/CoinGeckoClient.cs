@@ -45,5 +45,45 @@ public sealed class CoinGeckoClient(HttpClient httpClient) : ICoinGeckoClient
         return result;
     }
 
+    public async Task<IReadOnlyList<CoinGeckoCoin>> SearchCoins(string query, CancellationToken cancellationToken = default)
+    {
+        var q = (query ?? string.Empty).Trim();
+        if (q.Length == 0) return [];
+
+        var path = $"search?query={Uri.EscapeDataString(q)}";
+        var payload = await httpClient.GetFromJsonAsync<SearchResponse>(path, SerializerOptions, cancellationToken);
+        if (payload?.Coins is null) return [];
+
+        // CoinGecko returns coins ordered by market cap rank (coins without a rank come last) — preserve that order.
+        var result = new List<CoinGeckoCoin>(payload.Coins.Count);
+        foreach (var raw in payload.Coins)
+        {
+            if (string.IsNullOrWhiteSpace(raw.Id) || string.IsNullOrWhiteSpace(raw.Symbol) || string.IsNullOrWhiteSpace(raw.Name))
+                continue;
+            result.Add(new CoinGeckoCoin(raw.Id, raw.Symbol, raw.Name));
+        }
+        return result;
+    }
+
+    public async Task<IReadOnlyList<CoinGeckoCoin>> GetTopCoinsByMarketCap(int limit, CancellationToken cancellationToken = default)
+    {
+        if (limit <= 0) return [];
+
+        var path = $"coins/markets?vs_currency=usd&order=market_cap_desc&per_page={limit}&page=1&sparkline=false";
+        var payload = await httpClient.GetFromJsonAsync<List<MarketCoin>>(path, SerializerOptions, cancellationToken);
+        if (payload is null) return [];
+
+        var result = new List<CoinGeckoCoin>(payload.Count);
+        foreach (var raw in payload)
+        {
+            if (string.IsNullOrWhiteSpace(raw.Id) || string.IsNullOrWhiteSpace(raw.Symbol) || string.IsNullOrWhiteSpace(raw.Name))
+                continue;
+            result.Add(new CoinGeckoCoin(raw.Id, raw.Symbol, raw.Name));
+        }
+        return result;
+    }
+
     private sealed record RawCoin(string Id, string Symbol, string Name);
+    private sealed record SearchResponse(List<RawCoin> Coins);
+    private sealed record MarketCoin(string Id, string Symbol, string Name);
 }
