@@ -20,6 +20,7 @@ public static class DependencyInjection
         services.AddScoped<IPaycheckStatisticsService, PaycheckStatisticsService>();
         services.AddScoped<IExpenseStatisticsService, ExpenseStatisticsService>();
         services.AddScoped<IInvoiceStatisticsService, InvoiceStatisticsService>();
+        services.AddScoped<IInvestmentStatisticsService, InvestmentStatisticsService>();
 
         services.AddScoped<IProfileService, ProfileService>();
         services.AddScoped<ICountryProfileRegistry, CountryProfileRegistry>();
