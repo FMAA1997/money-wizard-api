@@ -3,6 +3,7 @@ using System;
 using Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Infrastructure.Migrations
 {
     [DbContext(typeof(MoneyWizardContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260424123229_AddInvoiceDocumentNumber")]
+    partial class AddInvoiceDocumentNumber
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -217,9 +220,6 @@ namespace Infrastructure.Migrations
                     b.Property<DateOnly?>("OriginalDate")
                         .HasColumnType("date");
 
-                    b.Property<Guid?>("ParentInvoiceId")
-                        .HasColumnType("uuid");
-
                     b.Property<int?>("PointOfSale")
                         .HasColumnType("integer");
 
@@ -229,20 +229,10 @@ namespace Infrastructure.Migrations
                     b.Property<Guid?>("Source")
                         .HasColumnType("uuid");
 
-                    b.Property<string>("Type")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(15)
-                        .HasColumnType("character varying(15)")
-                        .HasDefaultValue("Invoice");
-
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("ParentInvoiceId")
-                        .HasFilter("\"ParentInvoiceId\" IS NOT NULL");
 
                     b.HasIndex("Source");
 
@@ -498,11 +488,6 @@ namespace Infrastructure.Migrations
 
             modelBuilder.Entity("Domain.Models.Invoice", b =>
                 {
-                    b.HasOne("Domain.Models.Invoice", "ParentInvoice")
-                        .WithMany("ChildNotes")
-                        .HasForeignKey("ParentInvoiceId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
                     b.HasOne("Domain.Models.Invoice", "RecurringInvoice")
                         .WithMany("Exceptions")
                         .HasForeignKey("RecurringInvoiceId")
@@ -547,8 +532,6 @@ namespace Infrastructure.Migrations
                             b1.WithOwner()
                                 .HasForeignKey("InvoiceId");
                         });
-
-                    b.Navigation("ParentInvoice");
 
                     b.Navigation("Paycheck");
 
@@ -620,8 +603,6 @@ namespace Infrastructure.Migrations
 
             modelBuilder.Entity("Domain.Models.Invoice", b =>
                 {
-                    b.Navigation("ChildNotes");
-
                     b.Navigation("Exceptions");
 
                     b.Navigation("Expenses");

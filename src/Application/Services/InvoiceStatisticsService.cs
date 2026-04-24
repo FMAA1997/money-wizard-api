@@ -95,26 +95,30 @@ public sealed class InvoiceStatisticsService(
 
         var total = oneOffs
             .Where(i => i.Date >= startDate && i.Date <= endDate)
-            .Sum(i => lookup.Convert(i.Amount, i.Currency, "ARS", i.Date));
+            .Sum(i => Sign(i.Type) * lookup.Convert(i.Amount, i.Currency, "ARS", i.Date));
 
         foreach (var s in series)
         {
             var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
+            var sign = Sign(s.Type);
 
             foreach (var (date, _) in occurrences)
             {
                 if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
                 {
                     if (!exception.IsDeleted)
-                        total += lookup.Convert(exception.Amount, exception.Currency, "ARS", exception.Date);
+                        total += sign * lookup.Convert(exception.Amount, exception.Currency, "ARS", exception.Date);
                 }
                 else
                 {
-                    total += lookup.Convert(s.Amount, s.Currency, "ARS", date);
+                    total += sign * lookup.Convert(s.Amount, s.Currency, "ARS", date);
                 }
             }
         }
 
         return total;
     }
+
+    private static decimal Sign(InvoiceType type) =>
+        type == InvoiceType.CreditNote ? -1m : 1m;
 }

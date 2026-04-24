@@ -21,6 +21,15 @@ public sealed class InvoiceConfiguration : IEntityTypeConfiguration<Invoice>
             .IsRequired()
             .HasMaxLength(500);
 
+        builder.Property(i => i.Class)
+            .HasConversion<string>()
+            .HasMaxLength(1);
+
+        builder.Property(i => i.Type)
+            .HasConversion<string>()
+            .HasMaxLength(15)
+            .HasDefaultValue(InvoiceType.Invoice);
+
         builder.HasOne(i => i.User)
             .WithMany(u => u.Invoices)
             .HasForeignKey(i => i.UserId)
@@ -45,6 +54,15 @@ public sealed class InvoiceConfiguration : IEntityTypeConfiguration<Invoice>
             .WithMany(i => i.Exceptions)
             .HasForeignKey(i => i.RecurringInvoiceId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // Self-referential FK for credit/debit notes -> parent invoice
+        builder.HasOne(i => i.ParentInvoice)
+            .WithMany(i => i.ChildNotes)
+            .HasForeignKey(i => i.ParentInvoiceId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasIndex(i => i.ParentInvoiceId)
+            .HasFilter("\"ParentInvoiceId\" IS NOT NULL");
 
         builder.Property(i => i.IsDeleted).HasDefaultValue(false);
 

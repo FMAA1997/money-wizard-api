@@ -5,4 +5,5 @@ public sealed record UpdateInvoiceOccurrenceRequest(
     decimal? Amount,
     string? Currency,
     string? Description,
-    Guid? Source);
+    Guid? Source,
+    long? Number);

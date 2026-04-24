@@ -1,4 +1,5 @@
 using Application.DTOs.Shared;
+using Domain.Models;
 
 namespace Application.DTOs.Invoice;
 
@@ -10,6 +11,11 @@ public sealed record InvoiceResponse(
     IReadOnlyDictionary<string, decimal> Amounts,
     string Description,
     Guid? Source,
+    InvoiceType Type,
+    Guid? ParentInvoiceId,
+    InvoiceClass? Class,
+    int? PointOfSale,
+    long? Number,
     bool IsRecurring,
     Guid? RecurringInvoiceId,
     DateOnly? OriginalDate,

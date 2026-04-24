@@ -53,6 +53,10 @@ public sealed class InvoiceService(
                 return RecurrenceErrors.EndDateBeforeStart;
         }
 
+        var parentValidation = await ValidateParent(request.Type, request.ParentInvoiceId, cancellationToken);
+        if (parentValidation is not null)
+            return parentValidation.Value;
+
         var invoice = new Invoice
         {
             UserId = currentUserProvider.UserId,
@@ -61,6 +65,11 @@ public sealed class InvoiceService(
             Currency = request.Currency,
             Description = request.Description,
             Source = request.Source,
+            Type = request.Type,
+            ParentInvoiceId = request.ParentInvoiceId,
+            Class = request.Class,
+            PointOfSale = request.PointOfSale,
+            Number = request.Number,
             RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
             {
                 Frequency = request.Recurrence.Frequency,
@@ -90,11 +99,20 @@ public sealed class InvoiceService(
                 return RecurrenceErrors.EndDateBeforeStart;
         }
 
+        var parentValidation = await ValidateParent(request.Type, request.ParentInvoiceId, cancellationToken, currentId: id);
+        if (parentValidation is not null)
+            return parentValidation.Value;
+
         invoice.Date = request.Date;
         invoice.Amount = request.Amount;
         invoice.Currency = request.Currency;
         invoice.Description = request.Description;
         invoice.Source = request.Source;
+        invoice.Type = request.Type;
+        invoice.ParentInvoiceId = request.ParentInvoiceId;
+        invoice.Class = request.Class;
+        invoice.PointOfSale = request.PointOfSale;
+        invoice.Number = request.Number;
         invoice.RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
         {
             Frequency = request.Recurrence.Frequency,
@@ -144,6 +162,7 @@ public sealed class InvoiceService(
             existing.Currency = request.Currency ?? series.Currency;
             existing.Description = request.Description ?? series.Description;
             existing.Source = request.Source ?? series.Source;
+            existing.Number = request.Number;
             existing.IsDeleted = false;
 
             invoiceRepository.Update(existing);
@@ -160,6 +179,9 @@ public sealed class InvoiceService(
             Currency = request.Currency ?? series.Currency,
             Description = request.Description ?? series.Description,
             Source = request.Source ?? series.Source,
+            Type = series.Type,
+            ParentInvoiceId = series.ParentInvoiceId,
+            Number = request.Number,
             RecurringInvoiceId = id,
             OriginalDate = date
         };
@@ -183,6 +205,10 @@ public sealed class InvoiceService(
         if (request.Recurrence is not null && request.Recurrence.Interval < 1)
             return RecurrenceErrors.InvalidInterval;
 
+        var parentValidation = await ValidateParent(request.Type, request.ParentInvoiceId, cancellationToken, currentId: id);
+        if (parentValidation is not null)
+            return parentValidation.Value;
+
         var previousDate = RecurrenceExpander.GetPreviousOccurrence(series.Date, series.RecurrenceRule, date);
         series.RecurrenceRule.EndDate = previousDate;
 
@@ -202,6 +228,11 @@ public sealed class InvoiceService(
             Currency = request.Currency,
             Description = request.Description,
             Source = request.Source,
+            Type = request.Type,
+            ParentInvoiceId = request.ParentInvoiceId,
+            Class = request.Class,
+            PointOfSale = request.PointOfSale,
+            Number = request.Number,
             RecurrenceRule = recurrence is null ? null : new RecurrenceRule
             {
                 Frequency = recurrence.Frequency,
@@ -243,6 +274,8 @@ public sealed class InvoiceService(
                 Amount = series.Amount,
                 Currency = series.Currency,
                 Description = series.Description,
+                Type = series.Type,
+                ParentInvoiceId = series.ParentInvoiceId,
                 RecurringInvoiceId = id,
                 OriginalDate = date,
                 IsDeleted = true
@@ -319,6 +352,10 @@ public sealed class InvoiceService(
                 return new InvoiceCalendarRow(
                     InvoiceId: g.Key,
                     Description: first.Description,
+                    Type: seriesEntity?.Type ?? first.Type,
+                    ParentInvoiceId: seriesEntity?.ParentInvoiceId ?? first.ParentInvoiceId,
+                    Class: seriesEntity?.Class ?? first.Class,
+                    PointOfSale: seriesEntity?.PointOfSale ?? first.PointOfSale,
                     Source: source is null ? null : new InvoiceSourceInfo(source.Id, source.Description, source.Amount),
                     IsRecurring: first.IsRecurring,
                     Recurrence: first.Recurrence,
@@ -386,14 +423,40 @@ public sealed class InvoiceService(
         return results;
     }
 
+    private async Task<Error?> ValidateParent(InvoiceType type, Guid? parentInvoiceId, CancellationToken cancellationToken, Guid? currentId = null)
+    {
+        if (type == InvoiceType.Invoice)
+        {
+            if (parentInvoiceId.HasValue)
+                return InvoiceErrors.ParentNotAllowed;
+            return null;
+        }
+
+        if (!parentInvoiceId.HasValue)
+            return InvoiceErrors.ParentRequired;
+
+        if (currentId.HasValue && parentInvoiceId.Value == currentId.Value)
+            return InvoiceErrors.ParentMustBeInvoice;
+
+        var parent = await invoiceRepository.GetById(parentInvoiceId.Value, cancellationToken);
+        if (parent is null || parent.UserId != currentUserProvider.UserId)
+            return InvoiceErrors.ParentNotFound;
+
+        if (parent.Type != InvoiceType.Invoice)
+            return InvoiceErrors.ParentMustBeInvoice;
+
+        return null;
+    }
+
     private static IReadOnlyDictionary<string, decimal> SumByCurrency(IEnumerable<InvoiceResponse> occurrences)
     {
         var totals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
         foreach (var occurrence in occurrences)
         {
+            var sign = occurrence.Type == InvoiceType.CreditNote ? -1m : 1m;
             foreach (var (currency, amount) in occurrence.Amounts)
             {
-                totals[currency] = totals.GetValueOrDefault(currency) + amount;
+                totals[currency] = totals.GetValueOrDefault(currency) + sign * amount;
             }
         }
         return totals;
@@ -408,6 +471,11 @@ public sealed class InvoiceService(
             Currency: invoice.Currency,
             Description: invoice.Description,
             Source: invoice.Source,
+            Type: invoice.Type,
+            ParentInvoiceId: invoice.ParentInvoiceId,
+            Class: invoice.Class,
+            PointOfSale: invoice.PointOfSale,
+            Number: invoice.Number,
             RecurrenceRule: invoice.RecurrenceRule,
             RecurringInvoiceId: invoice.RecurringInvoiceId,
             OriginalDate: invoice.OriginalDate,
@@ -424,6 +492,11 @@ public sealed class InvoiceService(
             Amounts: lookup.ConvertToAll(invoice.Amount, invoice.Currency, displayCurrencies, invoice.Date),
             Description: invoice.Description,
             Source: invoice.Source,
+            Type: invoice.Type,
+            ParentInvoiceId: invoice.ParentInvoiceId,
+            Class: invoice.Class,
+            PointOfSale: invoice.PointOfSale,
+            Number: invoice.Number,
             IsRecurring: false,
             RecurringInvoiceId: null,
             OriginalDate: null,
@@ -441,6 +514,11 @@ public sealed class InvoiceService(
             Amounts: lookup.ConvertToAll(series.Amount, series.Currency, displayCurrencies, date),
             Description: series.Description,
             Source: series.Source,
+            Type: series.Type,
+            ParentInvoiceId: series.ParentInvoiceId,
+            Class: series.Class,
+            PointOfSale: series.PointOfSale,
+            Number: series.Number + occurrenceIndex,
             IsRecurring: true,
             RecurringInvoiceId: series.Id,
             OriginalDate: null,
@@ -463,6 +541,11 @@ public sealed class InvoiceService(
             Amounts: lookup.ConvertToAll(exception.Amount, exception.Currency, displayCurrencies, exception.Date),
             Description: exception.Description,
             Source: exception.Source,
+            Type: series.Type,
+            ParentInvoiceId: series.ParentInvoiceId,
+            Class: series.Class,
+            PointOfSale: series.PointOfSale,
+            Number: exception.Number ?? series.Number + occurrenceIndex,
             IsRecurring: true,
             RecurringInvoiceId: exception.RecurringInvoiceId,
             OriginalDate: exception.OriginalDate,

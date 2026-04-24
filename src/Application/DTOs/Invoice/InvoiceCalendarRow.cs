@@ -1,10 +1,15 @@
 using Application.DTOs.Shared;
+using Domain.Models;
 
 namespace Application.DTOs.Invoice;
 
 public sealed record InvoiceCalendarRow(
     Guid InvoiceId,
     string Description,
+    InvoiceType Type,
+    Guid? ParentInvoiceId,
+    InvoiceClass? Class,
+    int? PointOfSale,
     InvoiceSourceInfo? Source,
     bool IsRecurring,
     RecurrenceInfo? Recurrence,

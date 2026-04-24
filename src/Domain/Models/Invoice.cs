@@ -11,6 +11,13 @@ public sealed class Invoice : Entity
     public required string Description { get; set; }
     public Guid? Source { get; set; }
 
+    public InvoiceType Type { get; set; }
+    public Guid? ParentInvoiceId { get; set; }
+
+    public InvoiceClass? Class { get; set; }
+    public int? PointOfSale { get; set; }
+    public long? Number { get; set; }
+
     // Recurrence
     public RecurrenceRule? RecurrenceRule { get; set; }
 
@@ -26,6 +33,10 @@ public sealed class Invoice : Entity
     public Invoice? RecurringInvoice { get; set; }
     [JsonIgnore]
     public ICollection<Invoice> Exceptions { get; set; } = [];
+    [JsonIgnore]
+    public Invoice? ParentInvoice { get; set; }
+    [JsonIgnore]
+    public ICollection<Invoice> ChildNotes { get; set; } = [];
     [JsonIgnore]
     public ICollection<Expense> Expenses { get; set; } = [];
 }
