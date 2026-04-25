@@ -180,9 +180,7 @@ public sealed class InvestmentService(
         }
 
         var price = priceResult.Value;
-        // Bond prices are quoted per 100 nominal (market convention); quantity is in nominal units.
-        var priceScale = investment.AssetClass == AssetClass.Bond ? 0.01m : 1m;
-        var currentValueNative = investment.Quantity * price.Price * priceScale;
+        var currentValueNative = investment.Quantity * price.Price;
         var currentValue = context.Lookup.ConvertToAll(currentValueNative, price.Currency, context.DisplayCurrencies, price.AsOf);
 
         return Map(investment, ValuationStatus.Live, price.Price, price.Currency, price.AsOf, currentValue);

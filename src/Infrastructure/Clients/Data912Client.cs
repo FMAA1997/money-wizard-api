@@ -15,9 +15,9 @@ public sealed class Data912Client(HttpClient httpClient) : IData912Client
         FetchQuotes("live/arg_cedears", cancellationToken);
 
     public Task<IReadOnlyList<Data912Quote>> GetArgBonds(CancellationToken cancellationToken = default) =>
-        FetchQuotes("live/arg_bonds", cancellationToken);
+        FetchQuotes("live/arg_bonds", cancellationToken, 0.01m);
 
-    private async Task<IReadOnlyList<Data912Quote>> FetchQuotes(string path, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<Data912Quote>> FetchQuotes(string path, CancellationToken cancellationToken, decimal ratio = 1)
     {
         var payload = await httpClient.GetFromJsonAsync<List<RawQuote>>(path, SerializerOptions, cancellationToken);
         if (payload is null) return [];
@@ -27,7 +27,7 @@ public sealed class Data912Client(HttpClient httpClient) : IData912Client
         {
             if (string.IsNullOrWhiteSpace(raw.Symbol) || raw.C <= 0)
                 continue;
-            result.Add(new Data912Quote(raw.Symbol.Trim().ToUpperInvariant(), raw.C, raw.PctChange));
+            result.Add(new Data912Quote(raw.Symbol.Trim().ToUpperInvariant(), raw.C * ratio, raw.PctChange));
         }
         return result;
     }
