@@ -35,6 +35,8 @@ public static class DependencyInjection
 
         services.AddHttpClients(configuration);
         services.AddHttpClientTo<IExchangeRateClient, ArgentinaDatosExchangeRateClient>("ArgentinaDatos");
+        services.AddHttpClientTo<IArgentinaDatosClient, ArgentinaDatosClient>("ArgentinaDatos");
+        services.AddHttpClientTo<IDolarApiClient, DolarApiClient>("DolarApi");
         services.AddHttpClientTo<IData912Client, Data912Client>("Data912");
         services.AddHttpClientTo<ICoinGeckoClient, CoinGeckoClient>("CoinGecko");
         services.AddHttpClientTo<IFinnhubClient, FinnhubClient>("Finnhub");
