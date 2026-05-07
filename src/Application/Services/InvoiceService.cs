@@ -2,6 +2,7 @@ using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Invoice;
 using Application.DTOs.Shared;
+using Application.Services.Currency;
 using Domain.Abstractions;
 using Domain.Abstractions.Repositories;
 using Domain.Errors;
@@ -16,8 +17,7 @@ public sealed class InvoiceService(
     IInvoiceRepository invoiceRepository,
     ICurrentUserProvider currentUserProvider,
     IUnitOfWork unitOfWork,
-    IExchangeRateCache exchangeRateCache,
-    IUserCurrencyContext userCurrencyContext) : IInvoiceService
+    ICurrencyConverter currencyConverter) : IInvoiceService
 {
     public async Task<ErrorOr<IReadOnlyList<InvoiceDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
@@ -25,10 +25,23 @@ public sealed class InvoiceService(
             return RecurrenceErrors.InvalidDateRange;
 
         var invoices = await invoiceRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        return invoices.Select(i => MapEntityDetail(i, lookup, displayCurrencies)).ToList();
+        return invoices.Select(i => MapEntityDetail(i, scope)).ToList();
+    }
+
+    public async Task<ErrorOr<IReadOnlyList<InvoiceResponse>>> GetOccurrences(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    {
+        if (startDate > endDate)
+            return RecurrenceErrors.InvalidDateRange;
+
+        var invoices = await invoiceRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
+
+        var occurrences = await ExpandOccurrences(invoices, startDate, endDate, cancellationToken);
+
+        return occurrences
+            .OrderBy(o => o.Date)
+            .ToList();
     }
 
     public async Task<ErrorOr<InvoiceDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default)
@@ -37,10 +50,9 @@ public sealed class InvoiceService(
         if (invoice is null || invoice.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        return MapEntityDetail(invoice, lookup, displayCurrencies);
+        return MapEntityDetail(invoice, scope);
     }
 
     public async Task<ErrorOr<Invoice>> Create(CreateInvoiceRequest request, CancellationToken cancellationToken = default)
@@ -152,8 +164,7 @@ public sealed class InvoiceService(
         var existing = await invoiceRepository.GetException(id, date, cancellationToken);
         var occurrenceIndex = RecurrenceExpander.GetOccurrenceIndex(series.Date, series.RecurrenceRule, date);
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         if (existing is not null)
         {
@@ -168,7 +179,7 @@ public sealed class InvoiceService(
             invoiceRepository.Update(existing);
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
-            return MapOverride(existing, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
+            return MapOverride(existing, series, occurrenceIndex, scope);
         }
 
         var exception = new Invoice
@@ -189,7 +200,7 @@ public sealed class InvoiceService(
         await invoiceRepository.Add(exception, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapOverride(exception, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
+        return MapOverride(exception, series, occurrenceIndex, scope);
     }
 
     public async Task<ErrorOr<Invoice>> UpdateFromDate(Guid id, DateOnly date, UpdateInvoiceRequest request, CancellationToken cancellationToken = default)
@@ -388,14 +399,12 @@ public sealed class InvoiceService(
                 oneOffs.Add(i);
         }
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
-        var displayCurrencies = currencyProfile.DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
         var results = new List<InvoiceResponse>();
 
         foreach (var oneOff in oneOffs)
         {
-            results.Add(MapOneOff(oneOff, lookup, displayCurrencies));
+            results.Add(MapOneOff(oneOff, scope));
         }
 
         foreach (var s in series)
@@ -410,11 +419,11 @@ public sealed class InvoiceService(
                     if (exception.IsDeleted)
                         continue;
 
-                    results.Add(MapOverride(exception, s, index, lookup, displayCurrencies));
+                    results.Add(MapOverride(exception, s, index, scope));
                 }
                 else
                 {
-                    results.Add(MapVirtual(s, date, index, lookup, displayCurrencies));
+                    results.Add(MapVirtual(s, date, index, scope));
                 }
             }
         }
@@ -448,6 +457,16 @@ public sealed class InvoiceService(
         return null;
     }
 
+    private static Guid BuildOccurrenceId(Guid seriesId, DateOnly date)
+    {
+        Span<byte> buffer = stackalloc byte[20];
+        seriesId.TryWriteBytes(buffer);
+        BitConverter.TryWriteBytes(buffer[16..], date.DayNumber);
+        Span<byte> hash = stackalloc byte[16];
+        System.Security.Cryptography.MD5.HashData(buffer, hash);
+        return new Guid(hash);
+    }
+
     private static IReadOnlyDictionary<string, decimal> SumByCurrency(IEnumerable<InvoiceResponse> occurrences)
     {
         var totals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
@@ -462,7 +481,7 @@ public sealed class InvoiceService(
         return totals;
     }
 
-    private static InvoiceDetailResponse MapEntityDetail(Invoice invoice, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static InvoiceDetailResponse MapEntityDetail(Invoice invoice, CurrencyScope scope) =>
         new(
             Id: invoice.Id,
             UserId: invoice.UserId,
@@ -481,15 +500,15 @@ public sealed class InvoiceService(
             OriginalDate: invoice.OriginalDate,
             IsDeleted: invoice.IsDeleted,
             Paycheck: invoice.Paycheck,
-            Amounts: lookup.ConvertToAll(invoice.Amount, invoice.Currency, displayCurrencies, invoice.Date));
+            Amounts: scope.ConvertToDisplay(invoice.Amount, invoice.Currency, invoice.Date));
 
-    private static InvoiceResponse MapOneOff(Invoice invoice, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static InvoiceResponse MapOneOff(Invoice invoice, CurrencyScope scope) =>
         new(
             Id: invoice.Id,
             Date: invoice.Date,
             Amount: invoice.Amount,
             Currency: invoice.Currency,
-            Amounts: lookup.ConvertToAll(invoice.Amount, invoice.Currency, displayCurrencies, invoice.Date),
+            Amounts: scope.ConvertToDisplay(invoice.Amount, invoice.Currency, invoice.Date),
             Description: invoice.Description,
             Source: invoice.Source,
             Type: invoice.Type,
@@ -505,13 +524,13 @@ public sealed class InvoiceService(
             InstallmentNumber: null,
             TotalInstallments: null);
 
-    private static InvoiceResponse MapVirtual(Invoice series, DateOnly date, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static InvoiceResponse MapVirtual(Invoice series, DateOnly date, int occurrenceIndex, CurrencyScope scope) =>
         new(
-            Id: series.Id,
+            Id: BuildOccurrenceId(series.Id, date),
             Date: date,
             Amount: series.Amount,
             Currency: series.Currency,
-            Amounts: lookup.ConvertToAll(series.Amount, series.Currency, displayCurrencies, date),
+            Amounts: scope.ConvertToDisplay(series.Amount, series.Currency, date),
             Description: series.Description,
             Source: series.Source,
             Type: series.Type,
@@ -532,13 +551,13 @@ public sealed class InvoiceService(
             InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
             TotalInstallments: series.RecurrenceRule.TotalInstallments);
 
-    private static InvoiceResponse MapOverride(Invoice exception, Invoice series, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static InvoiceResponse MapOverride(Invoice exception, Invoice series, int occurrenceIndex, CurrencyScope scope) =>
         new(
             Id: exception.Id,
             Date: exception.Date,
             Amount: exception.Amount,
             Currency: exception.Currency,
-            Amounts: lookup.ConvertToAll(exception.Amount, exception.Currency, displayCurrencies, exception.Date),
+            Amounts: scope.ConvertToDisplay(exception.Amount, exception.Currency, exception.Date),
             Description: exception.Description,
             Source: exception.Source,
             Type: series.Type,

@@ -2,6 +2,7 @@ using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Paycheck;
 using Application.DTOs.Shared;
+using Application.Services.Currency;
 using Domain.Abstractions;
 using Domain.Abstractions.Repositories;
 using Domain.Errors;
@@ -16,8 +17,7 @@ public sealed class PaycheckService(
     IPaycheckRepository paycheckRepository,
     ICurrentUserProvider currentUserProvider,
     IUnitOfWork unitOfWork,
-    IExchangeRateCache exchangeRateCache,
-    IUserCurrencyContext userCurrencyContext) : IPaycheckService
+    ICurrencyConverter currencyConverter) : IPaycheckService
 {
     public async Task<ErrorOr<IReadOnlyList<PaycheckDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
@@ -25,10 +25,9 @@ public sealed class PaycheckService(
             return RecurrenceErrors.InvalidDateRange;
 
         var paychecks = await paycheckRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        return paychecks.Select(p => MapEntityDetail(p, lookup, displayCurrencies)).ToList();
+        return paychecks.Select(p => MapEntityDetail(p, scope)).ToList();
     }
 
     public async Task<ErrorOr<PaycheckDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default)
@@ -37,10 +36,9 @@ public sealed class PaycheckService(
         if (paycheck is null || paycheck.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        return MapEntityDetail(paycheck, lookup, displayCurrencies);
+        return MapEntityDetail(paycheck, scope);
     }
 
     public async Task<ErrorOr<Paycheck>> Create(CreatePaycheckRequest request, CancellationToken cancellationToken = default)
@@ -132,8 +130,7 @@ public sealed class PaycheckService(
         var existing = await paycheckRepository.GetException(id, date, cancellationToken);
         var occurrenceIndex = RecurrenceExpander.GetOccurrenceIndex(series.Date, series.RecurrenceRule, date);
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         if (existing is not null)
         {
@@ -146,7 +143,7 @@ public sealed class PaycheckService(
             paycheckRepository.Update(existing);
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
-            return MapOverride(existing, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
+            return MapOverride(existing, series, occurrenceIndex, scope);
         }
 
         var exception = new Paycheck
@@ -163,7 +160,7 @@ public sealed class PaycheckService(
         await paycheckRepository.Add(exception, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapOverride(exception, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
+        return MapOverride(exception, series, occurrenceIndex, scope);
     }
 
     public async Task<ErrorOr<Paycheck>> UpdateFromDate(Guid id, DateOnly date, UpdatePaycheckRequest request, CancellationToken cancellationToken = default)
@@ -340,14 +337,12 @@ public sealed class PaycheckService(
                 oneOffs.Add(p);
         }
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
-        var displayCurrencies = currencyProfile.DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
         var results = new List<PaycheckResponse>();
 
         foreach (var oneOff in oneOffs)
         {
-            results.Add(MapOneOff(oneOff, lookup, displayCurrencies));
+            results.Add(MapOneOff(oneOff, scope));
         }
 
         foreach (var s in series)
@@ -362,11 +357,11 @@ public sealed class PaycheckService(
                     if (exception.IsDeleted)
                         continue;
 
-                    results.Add(MapOverride(exception, s, index, lookup, displayCurrencies));
+                    results.Add(MapOverride(exception, s, index, scope));
                 }
                 else
                 {
-                    results.Add(MapVirtual(s, date, index, lookup, displayCurrencies));
+                    results.Add(MapVirtual(s, date, index, scope));
                 }
             }
         }
@@ -388,7 +383,7 @@ public sealed class PaycheckService(
         return totals;
     }
 
-    private static PaycheckDetailResponse MapEntityDetail(Paycheck paycheck, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static PaycheckDetailResponse MapEntityDetail(Paycheck paycheck, CurrencyScope scope) =>
         new(
             Id: paycheck.Id,
             UserId: paycheck.UserId,
@@ -400,15 +395,15 @@ public sealed class PaycheckService(
             RecurringPaycheckId: paycheck.RecurringPaycheckId,
             OriginalDate: paycheck.OriginalDate,
             IsDeleted: paycheck.IsDeleted,
-            Amounts: lookup.ConvertToAll(paycheck.Amount, paycheck.Currency, displayCurrencies, paycheck.Date));
+            Amounts: scope.ConvertToDisplay(paycheck.Amount, paycheck.Currency, paycheck.Date));
 
-    private static PaycheckResponse MapOneOff(Paycheck paycheck, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static PaycheckResponse MapOneOff(Paycheck paycheck, CurrencyScope scope) =>
         new(
             Id: paycheck.Id,
             Date: paycheck.Date,
             Amount: paycheck.Amount,
             Currency: paycheck.Currency,
-            Amounts: lookup.ConvertToAll(paycheck.Amount, paycheck.Currency, displayCurrencies, paycheck.Date),
+            Amounts: scope.ConvertToDisplay(paycheck.Amount, paycheck.Currency, paycheck.Date),
             Description: paycheck.Description,
             IsRecurring: false,
             RecurringPaycheckId: null,
@@ -418,13 +413,13 @@ public sealed class PaycheckService(
             InstallmentNumber: null,
             TotalInstallments: null);
 
-    private static PaycheckResponse MapVirtual(Paycheck series, DateOnly date, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static PaycheckResponse MapVirtual(Paycheck series, DateOnly date, int occurrenceIndex, CurrencyScope scope) =>
         new(
             Id: series.Id,
             Date: date,
             Amount: series.Amount,
             Currency: series.Currency,
-            Amounts: lookup.ConvertToAll(series.Amount, series.Currency, displayCurrencies, date),
+            Amounts: scope.ConvertToDisplay(series.Amount, series.Currency, date),
             Description: series.Description,
             IsRecurring: true,
             RecurringPaycheckId: series.Id,
@@ -439,13 +434,13 @@ public sealed class PaycheckService(
             InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
             TotalInstallments: series.RecurrenceRule.TotalInstallments);
 
-    private static PaycheckResponse MapOverride(Paycheck exception, Paycheck series, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static PaycheckResponse MapOverride(Paycheck exception, Paycheck series, int occurrenceIndex, CurrencyScope scope) =>
         new(
             Id: exception.Id,
             Date: exception.Date,
             Amount: exception.Amount,
             Currency: exception.Currency,
-            Amounts: lookup.ConvertToAll(exception.Amount, exception.Currency, displayCurrencies, exception.Date),
+            Amounts: scope.ConvertToDisplay(exception.Amount, exception.Currency, exception.Date),
             Description: exception.Description,
             IsRecurring: true,
             RecurringPaycheckId: exception.RecurringPaycheckId,

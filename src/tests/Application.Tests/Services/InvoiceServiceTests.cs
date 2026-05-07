@@ -1,6 +1,6 @@
 using Application.Abstractions;
-using Application.Abstractions.Services;
 using Application.Services;
+using Application.Tests.Helpers;
 using Domain.Abstractions;
 using Domain.Abstractions.Repositories;
 using Domain.Errors;
@@ -17,26 +17,17 @@ public class InvoiceServiceTests
     private readonly Mock<IInvoiceRepository> _invoiceRepositoryMock = new();
     private readonly Mock<ICurrentUserProvider> _currentUserProviderMock = new();
     private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
-    private readonly Mock<IExchangeRateCache> _exchangeRateCacheMock = new();
-    private readonly Mock<IUserCurrencyContext> _userCurrencyContextMock = new();
     private readonly InvoiceService _sut;
 
     public InvoiceServiceTests()
     {
         _currentUserProviderMock.Setup(p => p.UserId).Returns(UserId);
-        _exchangeRateCacheMock
-            .Setup(c => c.GetLookupAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new CurrencyLookup(new Dictionary<DateOnly, decimal>()));
-        _userCurrencyContextMock
-            .Setup(c => c.ResolveAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new UserCurrencyProfile(new[] { "USD" }, "USD"));
 
         _sut = new InvoiceService(
             _invoiceRepositoryMock.Object,
             _currentUserProviderMock.Object,
             _unitOfWorkMock.Object,
-            _exchangeRateCacheMock.Object,
-            _userCurrencyContextMock.Object);
+            TestCurrencyConverter.Create());
     }
 
     [Fact]

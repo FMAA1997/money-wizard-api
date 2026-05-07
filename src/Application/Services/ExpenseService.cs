@@ -2,6 +2,7 @@ using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Expense;
 using Application.DTOs.Shared;
+using Application.Services.Currency;
 using Domain.Abstractions;
 using Domain.Abstractions.Repositories;
 using Domain.Errors;
@@ -16,8 +17,7 @@ public sealed class ExpenseService(
     IExpenseRepository expenseRepository,
     ICurrentUserProvider currentUserProvider,
     IUnitOfWork unitOfWork,
-    IExchangeRateCache exchangeRateCache,
-    IUserCurrencyContext userCurrencyContext) : IExpenseService
+    ICurrencyConverter currencyConverter) : IExpenseService
 {
     public async Task<ErrorOr<IReadOnlyList<ExpenseDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
@@ -25,10 +25,9 @@ public sealed class ExpenseService(
             return RecurrenceErrors.InvalidDateRange;
 
         var expenses = await expenseRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        return expenses.Select(e => MapEntityDetail(e, lookup, displayCurrencies)).ToList();
+        return expenses.Select(e => MapEntityDetail(e, scope)).ToList();
     }
 
     public async Task<ErrorOr<CalendarResponse<ExpenseCalendarRow>>> GetCalendar(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
@@ -96,10 +95,9 @@ public sealed class ExpenseService(
         if (expense is null || expense.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        return MapEntityDetail(expense, lookup, displayCurrencies);
+        return MapEntityDetail(expense, scope);
     }
 
     public async Task<ErrorOr<Expense>> Create(CreateExpenseRequest request, CancellationToken cancellationToken = default)
@@ -197,8 +195,7 @@ public sealed class ExpenseService(
         var existing = await expenseRepository.GetException(id, date, cancellationToken);
         var occurrenceIndex = RecurrenceExpander.GetOccurrenceIndex(series.Date, series.RecurrenceRule, date);
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         if (existing is not null)
         {
@@ -214,7 +211,7 @@ public sealed class ExpenseService(
             expenseRepository.Update(existing);
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
-            return MapOverride(existing, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
+            return MapOverride(existing, series, occurrenceIndex, scope);
         }
 
         var exception = new Expense
@@ -234,7 +231,7 @@ public sealed class ExpenseService(
         await expenseRepository.Add(exception, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapOverride(exception, series, occurrenceIndex, lookup, currencyProfile.DisplayCurrencies);
+        return MapOverride(exception, series, occurrenceIndex, scope);
     }
 
     public async Task<ErrorOr<Expense>> UpdateFromDate(Guid id, DateOnly date, UpdateExpenseRequest request, CancellationToken cancellationToken = default)
@@ -371,14 +368,12 @@ public sealed class ExpenseService(
                 oneOffs.Add(e);
         }
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var currencyProfile = await userCurrencyContext.ResolveAsync(cancellationToken);
-        var displayCurrencies = currencyProfile.DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
         var results = new List<ExpenseResponse>();
 
         foreach (var oneOff in oneOffs)
         {
-            results.Add(MapOneOff(oneOff, lookup, displayCurrencies));
+            results.Add(MapOneOff(oneOff, scope));
         }
 
         foreach (var s in series)
@@ -393,11 +388,11 @@ public sealed class ExpenseService(
                     if (exception.IsDeleted)
                         continue;
 
-                    results.Add(MapOverride(exception, s, index, lookup, displayCurrencies));
+                    results.Add(MapOverride(exception, s, index, scope));
                 }
                 else
                 {
-                    results.Add(MapVirtual(s, date, index, lookup, displayCurrencies));
+                    results.Add(MapVirtual(s, date, index, scope));
                 }
             }
         }
@@ -419,7 +414,7 @@ public sealed class ExpenseService(
         return totals;
     }
 
-    private static ExpenseDetailResponse MapEntityDetail(Expense expense, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static ExpenseDetailResponse MapEntityDetail(Expense expense, CurrencyScope scope) =>
         new(
             Id: expense.Id,
             UserId: expense.UserId,
@@ -437,15 +432,15 @@ public sealed class ExpenseService(
             Category: expense.Category,
             Paycheck: expense.Paycheck,
             Invoice: expense.Invoice,
-            Amounts: lookup.ConvertToAll(expense.Amount, expense.Currency, displayCurrencies, expense.Date));
+            Amounts: scope.ConvertToDisplay(expense.Amount, expense.Currency, expense.Date));
 
-    private static ExpenseResponse MapOneOff(Expense expense, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static ExpenseResponse MapOneOff(Expense expense, CurrencyScope scope) =>
         new(
             Id: expense.Id,
             Date: expense.Date,
             Amount: expense.Amount,
             Currency: expense.Currency,
-            Amounts: lookup.ConvertToAll(expense.Amount, expense.Currency, displayCurrencies, expense.Date),
+            Amounts: scope.ConvertToDisplay(expense.Amount, expense.Currency, expense.Date),
             Description: expense.Description,
             CategoryId: expense.CategoryId,
             PaycheckId: expense.PaycheckId,
@@ -458,13 +453,13 @@ public sealed class ExpenseService(
             InstallmentNumber: null,
             TotalInstallments: null);
 
-    private static ExpenseResponse MapVirtual(Expense series, DateOnly date, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static ExpenseResponse MapVirtual(Expense series, DateOnly date, int occurrenceIndex, CurrencyScope scope) =>
         new(
             Id: series.Id,
             Date: date,
             Amount: series.Amount,
             Currency: series.Currency,
-            Amounts: lookup.ConvertToAll(series.Amount, series.Currency, displayCurrencies, date),
+            Amounts: scope.ConvertToDisplay(series.Amount, series.Currency, date),
             Description: series.Description,
             CategoryId: series.CategoryId,
             PaycheckId: series.PaycheckId,
@@ -482,13 +477,13 @@ public sealed class ExpenseService(
             InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
             TotalInstallments: series.RecurrenceRule.TotalInstallments);
 
-    private static ExpenseResponse MapOverride(Expense exception, Expense series, int occurrenceIndex, CurrencyLookup lookup, IEnumerable<string> displayCurrencies) =>
+    private static ExpenseResponse MapOverride(Expense exception, Expense series, int occurrenceIndex, CurrencyScope scope) =>
         new(
             Id: exception.Id,
             Date: exception.Date,
             Amount: exception.Amount,
             Currency: exception.Currency,
-            Amounts: lookup.ConvertToAll(exception.Amount, exception.Currency, displayCurrencies, exception.Date),
+            Amounts: scope.ConvertToDisplay(exception.Amount, exception.Currency, exception.Date),
             Description: exception.Description,
             CategoryId: exception.CategoryId,
             PaycheckId: exception.PaycheckId,

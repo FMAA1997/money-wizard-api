@@ -1,6 +1,7 @@
 using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Paycheck.Statistics;
+using Application.Services.Currency;
 using Domain.Abstractions.Repositories;
 using Domain.Errors;
 using Domain.Models;
@@ -12,8 +13,7 @@ namespace Application.Services;
 public sealed class PaycheckStatisticsService(
     IPaycheckRepository paycheckRepository,
     ICurrentUserProvider currentUserProvider,
-    IExchangeRateCache exchangeRateCache,
-    IUserCurrencyContext userCurrencyContext) : IPaycheckStatisticsService
+    ICurrencyConverter currencyConverter) : IPaycheckStatisticsService
 {
     public async Task<ErrorOr<PaycheckTotals>> GetTotals(int year, CancellationToken cancellationToken = default)
     {
@@ -22,15 +22,14 @@ public sealed class PaycheckStatisticsService(
             return result.Errors;
 
         var (paychecks, previousYearStart, currentYearStart, currentYearEnd) = result.Value;
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var primaryCurrency = (await userCurrencyContext.ResolveAsync(cancellationToken)).PrimaryCurrency;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var ytdEnd = today < currentYearEnd ? today : currentYearEnd;
 
-        var totalCurrentYear = SumExpandedAmounts(paychecks, currentYearStart, currentYearEnd, lookup, primaryCurrency);
-        var totalYtd = SumExpandedAmounts(paychecks, currentYearStart, ytdEnd, lookup, primaryCurrency);
-        var totalPreviousYear = SumExpandedAmounts(paychecks, previousYearStart, currentYearStart.AddDays(-1), lookup, primaryCurrency);
+        var totalCurrentYear = SumExpandedAmounts(paychecks, currentYearStart, currentYearEnd, scope);
+        var totalYtd = SumExpandedAmounts(paychecks, currentYearStart, ytdEnd, scope);
+        var totalPreviousYear = SumExpandedAmounts(paychecks, previousYearStart, currentYearStart.AddDays(-1), scope);
 
         var variationYoY = totalCurrentYear - totalPreviousYear;
         var variationYoyPctg = totalPreviousYear != 0
@@ -54,11 +53,10 @@ public sealed class PaycheckStatisticsService(
             return result.Errors;
 
         var (paychecks, previousYearStart, currentYearStart, currentYearEnd) = result.Value;
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var primaryCurrency = (await userCurrencyContext.ResolveAsync(cancellationToken)).PrimaryCurrency;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var currentYearMonthly = GetMonthlyAmounts(paychecks, currentYearStart, currentYearEnd, lookup, primaryCurrency);
-        var previousYearMonthly = GetMonthlyAmounts(paychecks, previousYearStart, currentYearStart.AddDays(-1), lookup, primaryCurrency);
+        var currentYearMonthly = GetMonthlyAmounts(paychecks, currentYearStart, currentYearEnd, scope);
+        var previousYearMonthly = GetMonthlyAmounts(paychecks, previousYearStart, currentYearStart.AddDays(-1), scope);
 
         var avgMonthlyIncome = currentYearMonthly.Values.Sum() / 12;
         var previousYearAvgMonthlyIncome = previousYearMonthly.Values.Sum() / 12;
@@ -132,8 +130,7 @@ public sealed class PaycheckStatisticsService(
         if (earliestDate is null)
             return PaycheckErrors.NotFound;
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var displayCurrencies = (await userCurrencyContext.ResolveAsync(cancellationToken)).DisplayCurrencies;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         return new UpcomingPaycheck
         {
@@ -142,7 +139,7 @@ public sealed class PaycheckStatisticsService(
             Description = earliestDescription!,
             Amount = earliestAmount,
             Currency = earliestCurrency!,
-            Amounts = lookup.ConvertToAll(earliestAmount, earliestCurrency!, displayCurrencies, earliestDate.Value)
+            Amounts = scope.ConvertToDisplay(earliestAmount, earliestCurrency!, earliestDate.Value)
         };
     }
 
@@ -178,7 +175,7 @@ public sealed class PaycheckStatisticsService(
         return (oneOffs, series, exceptionLookup);
     }
 
-    private static Dictionary<int, decimal> GetMonthlyAmounts(IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate, CurrencyLookup lookup, string targetCurrency)
+    private static Dictionary<int, decimal> GetMonthlyAmounts(IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         var monthly = new Dictionary<int, decimal>();
 
@@ -187,7 +184,7 @@ public sealed class PaycheckStatisticsService(
         foreach (var p in oneOffs.Where(p => p.Date >= startDate && p.Date <= endDate))
         {
             var month = p.Date.Month;
-            monthly[month] = monthly.GetValueOrDefault(month) + lookup.Convert(p.Amount, p.Currency, targetCurrency, p.Date);
+            monthly[month] = monthly.GetValueOrDefault(month) + scope.ConvertToPrimary(p.Amount, p.Currency, p.Date);
         }
 
         foreach (var s in series)
@@ -196,33 +193,33 @@ public sealed class PaycheckStatisticsService(
 
             foreach (var (date, _) in occurrences)
             {
-                decimal amountInUsd;
+                decimal amountInPrimary;
                 if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
                 {
                     if (exception.IsDeleted)
                         continue;
-                    amountInUsd = lookup.Convert(exception.Amount, exception.Currency, targetCurrency, exception.Date);
+                    amountInPrimary = scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date);
                 }
                 else
                 {
-                    amountInUsd = lookup.Convert(s.Amount, s.Currency, targetCurrency, date);
+                    amountInPrimary = scope.ConvertToPrimary(s.Amount, s.Currency, date);
                 }
 
                 var month = date.Month;
-                monthly[month] = monthly.GetValueOrDefault(month) + amountInUsd;
+                monthly[month] = monthly.GetValueOrDefault(month) + amountInPrimary;
             }
         }
 
         return monthly;
     }
 
-    private static decimal SumExpandedAmounts(IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate, CurrencyLookup lookup, string targetCurrency)
+    private static decimal SumExpandedAmounts(IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         var (oneOffs, series, exceptionLookup) = ClassifyPaychecks(paychecks);
 
         var total = oneOffs
             .Where(p => p.Date >= startDate && p.Date <= endDate)
-            .Sum(p => lookup.Convert(p.Amount, p.Currency, targetCurrency, p.Date));
+            .Sum(p => scope.ConvertToPrimary(p.Amount, p.Currency, p.Date));
 
         foreach (var s in series)
         {
@@ -233,11 +230,11 @@ public sealed class PaycheckStatisticsService(
                 if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
                 {
                     if (!exception.IsDeleted)
-                        total += lookup.Convert(exception.Amount, exception.Currency, targetCurrency, exception.Date);
+                        total += scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date);
                 }
                 else
                 {
-                    total += lookup.Convert(s.Amount, s.Currency, targetCurrency, date);
+                    total += scope.ConvertToPrimary(s.Amount, s.Currency, date);
                 }
             }
         }

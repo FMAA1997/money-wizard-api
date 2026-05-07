@@ -1,6 +1,7 @@
 using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.Services;
+using Application.Tests.Helpers;
 using Domain.Abstractions.Repositories;
 using Domain.Models;
 using FluentAssertions;
@@ -19,7 +20,6 @@ public class InvoiceStatisticsServiceTests
     private readonly Mock<ICountryProfileRegistry> _registryMock = new();
     private readonly Mock<ICountryProfileHandler> _handlerMock = new();
     private readonly Mock<ICurrentUserProvider> _currentUserProviderMock = new();
-    private readonly Mock<IExchangeRateCache> _exchangeRateCacheMock = new();
     private readonly InvoiceStatisticsService _sut;
 
     public InvoiceStatisticsServiceTests()
@@ -60,17 +60,13 @@ public class InvoiceStatisticsServiceTests
                 Tax = 0m
             });
 
-        _exchangeRateCacheMock
-            .Setup(c => c.GetLookupAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new CurrencyLookup(new Dictionary<DateOnly, decimal>()));
-
         _sut = new InvoiceStatisticsService(
             _userRepositoryMock.Object,
             _invoiceRepositoryMock.Object,
             _categoryRepositoryMock.Object,
             _registryMock.Object,
             _currentUserProviderMock.Object,
-            _exchangeRateCacheMock.Object);
+            TestCurrencyConverter.Create());
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using Application.Abstractions;
 using Application.Abstractions.Pricing;
 using Application.Abstractions.Services;
 using Application.DTOs.Investment;
+using Application.Services.Currency;
 using Domain.Abstractions;
 using Domain.Abstractions.Repositories;
 using Domain.Errors;
@@ -15,18 +16,17 @@ public sealed class InvestmentService(
     IInvestmentRepository investmentRepository,
     ICurrentUserProvider currentUserProvider,
     IUnitOfWork unitOfWork,
-    IExchangeRateCache exchangeRateCache,
-    IUserCurrencyContext userCurrencyContext,
+    ICurrencyConverter currencyConverter,
     IPriceProviderRegistry priceProviderRegistry) : IInvestmentService
 {
     public async Task<ErrorOr<IReadOnlyList<InvestmentDetailResponse>>> GetAll(CancellationToken cancellationToken = default)
     {
         var investments = await investmentRepository.GetByUserId(currentUserProvider.UserId, cancellationToken);
-        var context = await BuildValuationContext(cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
         var results = new List<InvestmentDetailResponse>(investments.Count);
         foreach (var investment in investments)
         {
-            results.Add(await Value(investment, context, cancellationToken));
+            results.Add(await Value(investment, scope, cancellationToken));
         }
         return results;
     }
@@ -37,8 +37,8 @@ public sealed class InvestmentService(
         if (investment is null || investment.UserId != currentUserProvider.UserId)
             return InvestmentErrors.NotFound;
 
-        var context = await BuildValuationContext(cancellationToken);
-        return await Value(investment, context, cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
+        return await Value(investment, scope, cancellationToken);
     }
 
     public async Task<ErrorOr<Investment>> Create(CreateInvestmentRequest request, CancellationToken cancellationToken = default)
@@ -116,55 +116,47 @@ public sealed class InvestmentService(
     public async Task<ErrorOr<InvestmentPortfolioResponse>> GetPortfolio(CancellationToken cancellationToken = default)
     {
         var investments = await investmentRepository.GetByUserId(currentUserProvider.UserId, cancellationToken);
-        var context = await BuildValuationContext(cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var totals = InitEmpty(context.DisplayCurrencies);
-        var perClass = new Dictionary<AssetClass, Dictionary<string, decimal>>();
+        var totals = scope.NewTotals();
+        var perClass = new Dictionary<AssetClass, CurrencyTotals>();
         var unvalued = 0;
 
         foreach (var investment in investments)
         {
-            var response = await Value(investment, context, cancellationToken);
+            var response = await Value(investment, scope, cancellationToken);
             if (response.ValuationStatus != ValuationStatus.Live || response.CurrentValue is null)
             {
                 unvalued++;
                 continue;
             }
 
-            foreach (var (currency, value) in response.CurrentValue)
-            {
-                totals[currency] += value;
-            }
+            totals.AddConverted(response.CurrentValue);
 
             if (!perClass.TryGetValue(investment.AssetClass, out var classTotals))
             {
-                classTotals = InitEmpty(context.DisplayCurrencies);
+                classTotals = scope.NewTotals();
                 perClass[investment.AssetClass] = classTotals;
             }
-            foreach (var (currency, value) in response.CurrentValue)
-            {
-                classTotals[currency] += value;
-            }
+            classTotals.AddConverted(response.CurrentValue);
         }
 
+        var portfolioTotal = totals.ToDictionary();
         var breakdown = perClass
-            .Select(kvp => new PortfolioAssetClassBreakdown(
-                AssetClass: kvp.Key,
-                CurrentValue: kvp.Value,
-                WeightPct: ComputeWeights(kvp.Value, totals)))
+            .Select(kvp =>
+            {
+                var classTotal = kvp.Value.ToDictionary();
+                return new PortfolioAssetClassBreakdown(
+                    AssetClass: kvp.Key,
+                    CurrentValue: classTotal,
+                    WeightPct: ComputeWeights(classTotal, portfolioTotal));
+            })
             .ToList();
 
-        return new InvestmentPortfolioResponse(totals, breakdown, unvalued);
+        return new InvestmentPortfolioResponse(portfolioTotal, breakdown, unvalued);
     }
 
-    private async Task<ValuationContext> BuildValuationContext(CancellationToken cancellationToken)
-    {
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var profile = await userCurrencyContext.ResolveAsync(cancellationToken);
-        return new ValuationContext(lookup, profile.DisplayCurrencies);
-    }
-
-    private async Task<InvestmentDetailResponse> Value(Investment investment, ValuationContext context, CancellationToken cancellationToken)
+    private async Task<InvestmentDetailResponse> Value(Investment investment, CurrencyScope scope, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(investment.Ticker))
         {
@@ -181,7 +173,7 @@ public sealed class InvestmentService(
 
         var price = priceResult.Value;
         var currentValueNative = investment.Quantity * price.Price;
-        var currentValue = context.Lookup.ConvertToAll(currentValueNative, price.Currency, context.DisplayCurrencies, price.AsOf);
+        var currentValue = scope.ConvertToDisplay(currentValueNative, price.Currency, price.AsOf);
 
         return Map(investment, ValuationStatus.Live, price.Price, price.Currency, price.AsOf, currentValue);
     }
@@ -208,14 +200,6 @@ public sealed class InvestmentService(
             ValuationStatus: status,
             CurrentValue: currentValue);
 
-    private static Dictionary<string, decimal> InitEmpty(IEnumerable<string> currencies)
-    {
-        var result = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-        foreach (var currency in currencies)
-            result[currency] = 0m;
-        return result;
-    }
-
     private static IReadOnlyDictionary<string, decimal> ComputeWeights(
         IReadOnlyDictionary<string, decimal> classTotal,
         IReadOnlyDictionary<string, decimal> portfolioTotal)
@@ -230,6 +214,4 @@ public sealed class InvestmentService(
 
     private static string? NormalizeTicker(string? ticker) =>
         string.IsNullOrWhiteSpace(ticker) ? null : ticker.Trim().ToUpperInvariant();
-
-    private sealed record ValuationContext(CurrencyLookup Lookup, IReadOnlyList<string> DisplayCurrencies);
 }

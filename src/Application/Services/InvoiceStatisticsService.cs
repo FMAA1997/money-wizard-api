@@ -1,6 +1,7 @@
 using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Invoice.Statistics;
+using Application.Services.Currency;
 using Domain.Abstractions.Repositories;
 using Domain.Errors;
 using Domain.Models;
@@ -15,7 +16,7 @@ public sealed class InvoiceStatisticsService(
     IInvoiceCategoryRepository invoiceCategoryRepository,
     ICountryProfileRegistry registry,
     ICurrentUserProvider currentUserProvider,
-    IExchangeRateCache exchangeRateCache) : IInvoiceStatisticsService
+    ICurrencyConverter currencyConverter) : IInvoiceStatisticsService
 {
     public async Task<ErrorOr<InvoiceCategoryProgress>> GetCategoryProgress(CancellationToken cancellationToken = default)
     {
@@ -39,13 +40,13 @@ public sealed class InvoiceStatisticsService(
         var periodEnd = periodStart.AddYears(1);
 
         var invoices = await invoiceRepository.GetByUserIdInRange(user.Id, periodStart, periodEnd, cancellationToken);
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         var invoicedEnd = today < periodEnd ? today : periodEnd;
         var invoicedAmount = invoicedEnd >= periodStart
-            ? SumExpandedAmountsInArs(invoices, periodStart, invoicedEnd, lookup)
+            ? SumExpandedAmountsInArs(invoices, periodStart, invoicedEnd, scope)
             : 0m;
-        var projectedAmount = SumExpandedAmountsInArs(invoices, periodStart, periodEnd, lookup);
+        var projectedAmount = SumExpandedAmountsInArs(invoices, periodStart, periodEnd, scope);
 
         var invoicedPercentage = category.Top != 0 ? invoicedAmount / category.Top * 100 : 0;
         var projectedPercentage = category.Top != 0 ? projectedAmount / category.Top * 100 : 0;
@@ -77,7 +78,7 @@ public sealed class InvoiceStatisticsService(
         return new DateOnly(year, month, Math.Min(day, maxDay));
     }
 
-    private static decimal SumExpandedAmountsInArs(IReadOnlyList<Invoice> invoices, DateOnly startDate, DateOnly endDate, CurrencyLookup lookup)
+    private static decimal SumExpandedAmountsInArs(IReadOnlyList<Invoice> invoices, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         var oneOffs = new List<Invoice>();
         var series = new List<Invoice>();
@@ -95,7 +96,7 @@ public sealed class InvoiceStatisticsService(
 
         var total = oneOffs
             .Where(i => i.Date >= startDate && i.Date <= endDate)
-            .Sum(i => Sign(i.Type) * lookup.Convert(i.Amount, i.Currency, "ARS", i.Date));
+            .Sum(i => Sign(i.Type) * scope.Convert(i.Amount, i.Currency, "ARS", i.Date));
 
         foreach (var s in series)
         {
@@ -107,11 +108,11 @@ public sealed class InvoiceStatisticsService(
                 if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
                 {
                     if (!exception.IsDeleted)
-                        total += sign * lookup.Convert(exception.Amount, exception.Currency, "ARS", exception.Date);
+                        total += sign * scope.Convert(exception.Amount, exception.Currency, "ARS", exception.Date);
                 }
                 else
                 {
-                    total += sign * lookup.Convert(s.Amount, s.Currency, "ARS", date);
+                    total += sign * scope.Convert(s.Amount, s.Currency, "ARS", date);
                 }
             }
         }

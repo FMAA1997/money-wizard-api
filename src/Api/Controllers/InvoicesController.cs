@@ -17,6 +17,11 @@ public sealed class InvoicesController(IInvoiceService invoiceService) : ErrorCo
         [FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate, CancellationToken cancellationToken)
         => MatchOk(await invoiceService.GetAllInRange(startDate, endDate, cancellationToken));
 
+    [HttpGet("occurrences")]
+    public async Task<ActionResult<IReadOnlyList<InvoiceResponse>>> GetOccurrences(
+        [FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate, CancellationToken cancellationToken)
+        => MatchOk(await invoiceService.GetOccurrences(startDate, endDate, cancellationToken));
+
     [HttpGet("calendar")]
     public async Task<ActionResult<CalendarResponse<InvoiceCalendarRow>>> GetCalendar(
         [FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate, CancellationToken cancellationToken)
