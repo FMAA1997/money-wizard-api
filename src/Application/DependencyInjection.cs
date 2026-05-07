@@ -2,6 +2,7 @@ using Application.Abstractions.Services;
 using Application.Services;
 using Application.Services.CountryHandlers;
 using Application.Services.Currency;
+using Application.Services.Investments;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Application;
@@ -29,6 +30,7 @@ public static class DependencyInjection
         services.AddScoped<ICountryProfileRegistry, CountryProfileRegistry>();
         services.AddScoped<IUserCurrencyContext, UserCurrencyContext>();
         services.AddScoped<ICurrencyConverter, CurrencyConverter>();
+        services.AddScoped<IInvestmentYieldCalculator, InvestmentYieldCalculator>();
         services.AddScoped<UserResponseAssembler>();
         services.AddScoped<ICountryProfileHandler, ArgentinaCountryProfileHandler>();
         services.AddScoped<ICountryProfileHandler, RowCountryProfileHandler>();

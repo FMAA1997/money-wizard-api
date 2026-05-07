@@ -51,6 +51,7 @@ public static class DependencyInjection
         services.AddSingleton<IPriceProvider, Data912ArgBondsProvider>();
         services.AddSingleton<IPriceProvider, CoinGeckoCryptoProvider>();
         services.AddSingleton<IPriceProvider, CafciFciProvider>();
+        services.AddSingleton<IPriceProvider, CashPriceProvider>();
         services.AddSingleton<IPriceProviderRegistry, PriceProviderRegistry>();
 
         return services;

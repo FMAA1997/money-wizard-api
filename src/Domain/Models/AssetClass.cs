@@ -7,5 +7,6 @@ public enum AssetClass
     Crypto,
     Bond,
     Cedear,
-    Fci
+    Fci,
+    Cash
 }
