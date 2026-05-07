@@ -15,4 +15,8 @@ public sealed class DashboardController(IDashboardService dashboardService) : Er
         [FromQuery] DateOnly to,
         CancellationToken cancellationToken = default) =>
         MatchOk(await dashboardService.GetMoneyFlow(from, to, cancellationToken));
+
+    [HttpGet("results")]
+    public async Task<ActionResult<DashboardResults>> GetResults(CancellationToken cancellationToken = default) =>
+        MatchOk(await dashboardService.GetResults(cancellationToken));
 }

@@ -1,6 +1,7 @@
 using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Dashboard;
+using Application.Services.Currency;
 using Domain.Abstractions.Repositories;
 using Domain.Models;
 using Domain.Services;
@@ -13,8 +14,7 @@ public sealed class DashboardService(
     IInvoiceRepository invoiceRepository,
     IExpenseRepository expenseRepository,
     ICurrentUserProvider currentUserProvider,
-    IExchangeRateCache exchangeRateCache,
-    IUserCurrencyContext userCurrencyContext) : IDashboardService
+    ICurrencyConverter currencyConverter) : IDashboardService
 {
     private const string OtherPaycheck = "Other Paycheck";
     private const string OtherInvoice = "Other Invoice";
@@ -33,11 +33,10 @@ public sealed class DashboardService(
         var invoices = await invoiceRepository.GetByUserIdInRange(userId, from, to, cancellationToken);
         var expenses = await expenseRepository.GetByUserIdInRange(userId, from, to, cancellationToken);
 
-        var lookup = await exchangeRateCache.GetLookupAsync(cancellationToken);
-        var primaryCurrency = (await userCurrencyContext.ResolveAsync(cancellationToken)).PrimaryCurrency;
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var paycheckTotals = ExpandPaycheckTotals(paychecks, from, to, lookup, primaryCurrency);
-        var (invoiceTotals, invoiceSources) = ExpandInvoiceTotals(invoices, from, to, lookup, primaryCurrency);
+        var paycheckTotals = ExpandPaycheckTotals(paychecks, from, to, scope);
+        var (invoiceTotals, invoiceSources) = ExpandInvoiceTotals(invoices, from, to, scope);
 
         var paycheckMeta = paychecks
             .Where(p => p.RecurringPaycheckId is null)
@@ -53,7 +52,7 @@ public sealed class DashboardService(
         var otherOrphanToCategory = new Dictionary<string, decimal>();
         var categoryColors = new Dictionary<string, string>();
 
-        foreach (var (date, amount, expense) in ExpandExpenseOccurrences(expenses, from, to, lookup, primaryCurrency))
+        foreach (var (date, amount, expense) in ExpandExpenseOccurrences(expenses, from, to, scope))
         {
             var categoryName = expense.Category?.Name ?? Uncategorized;
             var categoryColor = expense.Category?.Color ?? UncategorizedColor;
@@ -127,6 +126,157 @@ public sealed class DashboardService(
             paycheckToSavings,
             invoiceToSavings,
             categoryColors);
+    }
+
+    public async Task<ErrorOr<DashboardResults>> GetResults(CancellationToken cancellationToken = default)
+    {
+        var userId = currentUserProvider.UserId;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var yearStart = new DateOnly(today.Year, 1, 1);
+        var yearEnd = new DateOnly(today.Year, 12, 31);
+        var monthStart = new DateOnly(today.Year, today.Month, 1);
+        var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+
+        var paychecks = await paycheckRepository.GetByUserIdInRange(userId, yearStart, yearEnd, cancellationToken);
+        var invoices = await invoiceRepository.GetByUserIdInRange(userId, yearStart, yearEnd, cancellationToken);
+        var expenses = await expenseRepository.GetByUserIdInRange(userId, yearStart, yearEnd, cancellationToken);
+        var hasInvoices = await invoiceRepository.AnyForUser(userId, cancellationToken);
+
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
+
+        return new DashboardResults
+        {
+            CurrentMonth = BuildPeriod(paychecks, invoices, expenses, monthStart, monthEnd, hasInvoices, scope),
+            YearToDate = BuildPeriod(paychecks, invoices, expenses, yearStart, today, hasInvoices, scope),
+            YearProjected = BuildPeriod(paychecks, invoices, expenses, yearStart, yearEnd, hasInvoices, scope),
+        };
+    }
+
+    private static DashboardResultPeriod BuildPeriod(
+        IReadOnlyList<Paycheck> paychecks,
+        IReadOnlyList<Invoice> invoices,
+        IReadOnlyList<Expense> expenses,
+        DateOnly from,
+        DateOnly to,
+        bool hasInvoices,
+        CurrencyScope scope)
+    {
+        var paychecksDict = SumPaychecks(paychecks, from, to, scope).ToDictionary();
+        var expensesDict = SumExpenses(expenses, from, to, scope).ToDictionary();
+
+        if (!hasInvoices)
+        {
+            return new DashboardResultPeriod
+            {
+                TotalPaychecks = paychecksDict,
+                TotalExpenses = expensesDict,
+                PrimaryResult = Subtract(paychecksDict, expensesDict),
+            };
+        }
+
+        var invoicedDict = SumInvoices(invoices, from, to, scope).ToDictionary();
+
+        return new DashboardResultPeriod
+        {
+            TotalPaychecks = paychecksDict,
+            TotalExpenses = expensesDict,
+            TotalInvoiced = invoicedDict,
+            PrimaryResult = Subtract(invoicedDict, expensesDict),
+            NonInvoicedTotal = Subtract(paychecksDict, invoicedDict),
+            FinalResult = Subtract(paychecksDict, expensesDict),
+        };
+    }
+
+    private static CurrencyTotals SumPaychecks(IReadOnlyList<Paycheck> paychecks, DateOnly from, DateOnly to, CurrencyScope scope)
+    {
+        var totals = scope.NewTotals();
+        var (oneOffs, series, exceptionLookup) = ClassifyPaychecks(paychecks);
+
+        foreach (var p in oneOffs.Where(p => p.Date >= from && p.Date <= to))
+            totals.Add(p.Amount, p.Currency, p.Date);
+
+        foreach (var s in series)
+        {
+            foreach (var (date, _) in RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, from, to))
+            {
+                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
+                {
+                    if (!exception.IsDeleted)
+                        totals.Add(exception.Amount, exception.Currency, exception.Date);
+                }
+                else
+                {
+                    totals.Add(s.Amount, s.Currency, date);
+                }
+            }
+        }
+
+        return totals;
+    }
+
+    private static CurrencyTotals SumExpenses(IReadOnlyList<Expense> expenses, DateOnly from, DateOnly to, CurrencyScope scope)
+    {
+        var totals = scope.NewTotals();
+        var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
+
+        foreach (var e in oneOffs.Where(e => e.Date >= from && e.Date <= to))
+            totals.Add(e.Amount, e.Currency, e.Date);
+
+        foreach (var s in series)
+        {
+            foreach (var (date, _) in RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, from, to))
+            {
+                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
+                {
+                    if (!exception.IsDeleted)
+                        totals.Add(exception.Amount, exception.Currency, exception.Date);
+                }
+                else
+                {
+                    totals.Add(s.Amount, s.Currency, date);
+                }
+            }
+        }
+
+        return totals;
+    }
+
+    private static CurrencyTotals SumInvoices(IReadOnlyList<Invoice> invoices, DateOnly from, DateOnly to, CurrencyScope scope)
+    {
+        var totals = scope.NewTotals();
+        var (oneOffs, series, exceptionLookup) = ClassifyInvoices(invoices);
+
+        foreach (var i in oneOffs.Where(i => i.Date >= from && i.Date <= to))
+            totals.Add(Sign(i.Type) * i.Amount, i.Currency, i.Date);
+
+        foreach (var s in series)
+        {
+            var sign = Sign(s.Type);
+            foreach (var (date, _) in RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, from, to))
+            {
+                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
+                {
+                    if (!exception.IsDeleted)
+                        totals.Add(sign * exception.Amount, exception.Currency, exception.Date);
+                }
+                else
+                {
+                    totals.Add(sign * s.Amount, s.Currency, date);
+                }
+            }
+        }
+
+        return totals;
+    }
+
+    private static IReadOnlyDictionary<string, decimal> Subtract(
+        IReadOnlyDictionary<string, decimal> a,
+        IReadOnlyDictionary<string, decimal> b)
+    {
+        var result = new Dictionary<string, decimal>(a.Count);
+        foreach (var (currency, value) in a)
+            result[currency] = value - b.GetValueOrDefault(currency);
+        return result;
     }
 
     private static MoneyFlow BuildMoneyFlow(
@@ -269,13 +419,13 @@ public sealed class DashboardService(
     }
 
     private static Dictionary<Guid, decimal> ExpandPaycheckTotals(
-        IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate, CurrencyLookup lookup, string targetCurrency)
+        IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         var totals = new Dictionary<Guid, decimal>();
         var (oneOffs, series, exceptionLookup) = ClassifyPaychecks(paychecks);
 
         foreach (var p in oneOffs.Where(p => p.Date >= startDate && p.Date <= endDate))
-            totals[p.Id] = totals.GetValueOrDefault(p.Id) + lookup.Convert(p.Amount, p.Currency, targetCurrency, p.Date);
+            totals[p.Id] = totals.GetValueOrDefault(p.Id) + scope.ConvertToPrimary(p.Amount, p.Currency, p.Date);
 
         foreach (var s in series)
         {
@@ -285,11 +435,11 @@ public sealed class DashboardService(
                 if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
                 {
                     if (exception.IsDeleted) continue;
-                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + lookup.Convert(exception.Amount, exception.Currency, targetCurrency, exception.Date);
+                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date);
                 }
                 else
                 {
-                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + lookup.Convert(s.Amount, s.Currency, targetCurrency, date);
+                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + scope.ConvertToPrimary(s.Amount, s.Currency, date);
                 }
             }
         }
@@ -298,7 +448,7 @@ public sealed class DashboardService(
     }
 
     private static (Dictionary<Guid, decimal> Totals, Dictionary<Guid, Guid?> Sources) ExpandInvoiceTotals(
-        IReadOnlyList<Invoice> invoices, DateOnly startDate, DateOnly endDate, CurrencyLookup lookup, string targetCurrency)
+        IReadOnlyList<Invoice> invoices, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         var totals = new Dictionary<Guid, decimal>();
         var sources = new Dictionary<Guid, Guid?>();
@@ -307,7 +457,7 @@ public sealed class DashboardService(
         foreach (var i in oneOffs.Where(i => i.Date >= startDate && i.Date <= endDate))
         {
             var sign = Sign(i.Type);
-            totals[i.Id] = totals.GetValueOrDefault(i.Id) + sign * lookup.Convert(i.Amount, i.Currency, targetCurrency, i.Date);
+            totals[i.Id] = totals.GetValueOrDefault(i.Id) + sign * scope.ConvertToPrimary(i.Amount, i.Currency, i.Date);
             sources[i.Id] = i.Source;
         }
 
@@ -320,11 +470,11 @@ public sealed class DashboardService(
                 if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
                 {
                     if (exception.IsDeleted) continue;
-                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + sign * lookup.Convert(exception.Amount, exception.Currency, targetCurrency, exception.Date);
+                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + sign * scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date);
                 }
                 else
                 {
-                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + sign * lookup.Convert(s.Amount, s.Currency, targetCurrency, date);
+                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + sign * scope.ConvertToPrimary(s.Amount, s.Currency, date);
                 }
             }
             sources[s.Id] = s.Source;
@@ -334,12 +484,12 @@ public sealed class DashboardService(
     }
 
     private static IEnumerable<(DateOnly Date, decimal Amount, Expense Expense)> ExpandExpenseOccurrences(
-        IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate, CurrencyLookup lookup, string targetCurrency)
+        IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
 
         foreach (var e in oneOffs.Where(e => e.Date >= startDate && e.Date <= endDate))
-            yield return (e.Date, lookup.Convert(e.Amount, e.Currency, targetCurrency, e.Date), e);
+            yield return (e.Date, scope.ConvertToPrimary(e.Amount, e.Currency, e.Date), e);
 
         foreach (var s in series)
         {
@@ -349,11 +499,11 @@ public sealed class DashboardService(
                 if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
                 {
                     if (exception.IsDeleted) continue;
-                    yield return (date, lookup.Convert(exception.Amount, exception.Currency, targetCurrency, exception.Date), exception);
+                    yield return (date, scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date), exception);
                 }
                 else
                 {
-                    yield return (date, lookup.Convert(s.Amount, s.Currency, targetCurrency, date), s);
+                    yield return (date, scope.ConvertToPrimary(s.Amount, s.Currency, date), s);
                 }
             }
         }

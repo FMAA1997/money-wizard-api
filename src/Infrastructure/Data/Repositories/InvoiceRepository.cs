@@ -24,6 +24,9 @@ public sealed class InvoiceRepository(MoneyWizardContext context) : IInvoiceRepo
     public async Task<IReadOnlyList<Invoice>> GetByUserId(Guid userId, CancellationToken cancellationToken = default)
         => await context.Invoices.Where(i => i.UserId == userId).ToListAsync(cancellationToken);
 
+    public Task<bool> AnyForUser(Guid userId, CancellationToken cancellationToken = default)
+        => context.Invoices.AnyAsync(i => i.UserId == userId, cancellationToken);
+
     public async Task<IReadOnlyList<Invoice>> GetByUserIdInRange(Guid userId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
         => await context.Invoices
             .Include(i => i.Paycheck)
