@@ -27,7 +27,7 @@ public sealed record InvoiceSegmentResponse(
 
 public sealed record InvoiceExceptionResponse(
     Guid Id,
-    DateOnly OriginalDate,
+    DateOnly? OriginalDate,
     DateOnly? Date,
     decimal? Amount,
     string? Currency,
@@ -36,6 +36,6 @@ public sealed record InvoiceExceptionResponse(
 
 public sealed record InvoiceParentSummary(
     Guid SeriesId,
-    DateOnly OriginalDate,
+    DateOnly? OriginalDate,
     long? Number,
     string Description);

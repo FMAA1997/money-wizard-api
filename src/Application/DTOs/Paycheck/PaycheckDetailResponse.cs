@@ -18,7 +18,7 @@ public sealed record PaycheckSegmentResponse(
 
 public sealed record PaycheckExceptionResponse(
     Guid Id,
-    DateOnly OriginalDate,
+    DateOnly? OriginalDate,
     DateOnly? Date,
     decimal? Amount,
     string? Currency,

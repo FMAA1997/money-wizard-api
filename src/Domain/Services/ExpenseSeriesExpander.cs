@@ -17,7 +17,9 @@ public static class ExpenseSeriesExpander
         DateOnly rangeEnd)
     {
         var segments = series.Segments.OrderBy(s => s.EffectiveFrom).ToList();
-        var exceptions = series.Exceptions.ToDictionary(e => e.OriginalDate);
+        var exceptions = series.Exceptions
+            .Where(e => e.OriginalDate.HasValue)
+            .ToDictionary(e => e.OriginalDate!.Value);
         var results = new List<ExpenseOccurrence>();
 
         for (var i = 0; i < segments.Count; i++)

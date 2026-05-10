@@ -24,6 +24,21 @@ public sealed class PaycheckExceptionConfiguration : IEntityTypeConfiguration<Pa
         builder.Property(e => e.IsDeleted).HasDefaultValue(false);
 
         builder.HasIndex(e => new { e.SeriesId, e.OriginalDate })
-            .IsUnique();
+            .IsUnique()
+            .HasFilter("\"OriginalDate\" IS NOT NULL");
+
+        builder.HasIndex(e => new { e.SeriesId, e.Date })
+            .IsUnique()
+            .HasFilter("\"OriginalDate\" IS NULL");
+
+        builder.ToTable(t =>
+        {
+            t.HasCheckConstraint(
+                "chk_paycheck_exception_overlay_kind",
+                "\"OriginalDate\" IS NOT NULL OR (\"Date\" IS NOT NULL AND \"Amount\" IS NOT NULL AND \"Currency\" IS NOT NULL)");
+            t.HasCheckConstraint(
+                "chk_paycheck_exception_isdeleted_only_on_override",
+                "\"OriginalDate\" IS NOT NULL OR \"IsDeleted\" = FALSE");
+        });
     }
 }

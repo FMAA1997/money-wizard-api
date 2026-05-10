@@ -26,7 +26,7 @@ public sealed record ExpenseSegmentResponse(
 
 public sealed record ExpenseExceptionResponse(
     Guid Id,
-    DateOnly OriginalDate,
+    DateOnly? OriginalDate,
     DateOnly? Date,
     decimal? Amount,
     string? Currency,

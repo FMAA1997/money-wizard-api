@@ -19,7 +19,9 @@ public static class InvoiceSeriesExpander
         DateOnly rangeEnd)
     {
         var segments = series.Segments.OrderBy(s => s.EffectiveFrom).ToList();
-        var exceptions = series.Exceptions.ToDictionary(e => e.OriginalDate);
+        var exceptions = series.Exceptions
+            .Where(e => e.OriginalDate.HasValue)
+            .ToDictionary(e => e.OriginalDate!.Value);
         var results = new List<InvoiceOccurrence>();
 
         var globalIndex = 0;
