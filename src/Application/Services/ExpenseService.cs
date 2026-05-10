@@ -201,9 +201,6 @@ public sealed class ExpenseService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
 
-        if (!ExpenseSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
         if (request.Recurrence is not null)
         {
             if (request.Recurrence.Interval < 1)
@@ -212,13 +209,15 @@ public sealed class ExpenseService(
                 return RecurrenceErrors.EndDateBeforeStart;
         }
 
-        var segment = ExpenseSeriesExpander.GetSegmentForDate(series, date)!;
+        var segment = ExpenseSeriesExpander.GetSegmentForDate(series, date);
 
         unitOfWork.BeginTransaction();
-        CapOrDeleteSegment(segment, date);
-
-        await expenseRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
-        await expenseRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+        if (segment is not null)
+        {
+            CapOrDeleteSegment(segment, date);
+            await expenseRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
+            await expenseRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+        }
 
         var newSegment = new ExpenseSegment
         {
@@ -282,10 +281,9 @@ public sealed class ExpenseService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
 
-        if (!ExpenseSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
-        var segment = ExpenseSeriesExpander.GetSegmentForDate(series, date)!;
+        var segment = ExpenseSeriesExpander.GetSegmentForDate(series, date);
+        if (segment is null)
+            return ExpenseErrors.NotFound;
 
         unitOfWork.BeginTransaction();
         CapOrDeleteSegment(segment, date);

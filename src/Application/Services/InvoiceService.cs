@@ -250,9 +250,6 @@ public sealed class InvoiceService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
         if (request.Recurrence is not null)
         {
             if (request.Recurrence.Interval < 1)
@@ -261,13 +258,15 @@ public sealed class InvoiceService(
                 return RecurrenceErrors.EndDateBeforeStart;
         }
 
-        var segment = InvoiceSeriesExpander.GetSegmentForDate(series, date)!;
+        var segment = InvoiceSeriesExpander.GetSegmentForDate(series, date);
 
         unitOfWork.BeginTransaction();
-        CapOrDeleteSegment(segment, date);
-
-        await invoiceRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
-        await invoiceRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+        if (segment is not null)
+        {
+            CapOrDeleteSegment(segment, date);
+            await invoiceRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
+            await invoiceRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+        }
 
         var newSegment = new InvoiceSegment
         {
@@ -331,10 +330,9 @@ public sealed class InvoiceService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
-        var segment = InvoiceSeriesExpander.GetSegmentForDate(series, date)!;
+        var segment = InvoiceSeriesExpander.GetSegmentForDate(series, date);
+        if (segment is null)
+            return InvoiceErrors.NotFound;
 
         unitOfWork.BeginTransaction();
         CapOrDeleteSegment(segment, date);

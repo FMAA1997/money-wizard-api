@@ -199,9 +199,6 @@ public sealed class PaycheckService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        if (!PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
         if (request.Recurrence is not null)
         {
             if (request.Recurrence.Interval < 1)
@@ -210,13 +207,15 @@ public sealed class PaycheckService(
                 return RecurrenceErrors.EndDateBeforeStart;
         }
 
-        var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
+        var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date);
 
         unitOfWork.BeginTransaction();
-        CapOrDeleteSegment(segment, date);
-
-        await paycheckRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
-        await paycheckRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+        if (segment is not null)
+        {
+            CapOrDeleteSegment(segment, date);
+            await paycheckRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
+            await paycheckRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+        }
 
         var newSegment = new PaycheckSegment
         {
@@ -278,10 +277,10 @@ public sealed class PaycheckService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        if (!PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
+        var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date);
+        if (segment is null)
+            return PaycheckErrors.NotFound;
 
-        var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
         CapOrDeleteSegment(segment, date);
 
         await paycheckRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
