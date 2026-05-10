@@ -129,18 +129,16 @@ public class DashboardServiceTests
     public async Task GetResults_RecurrenceException_OverridesAmount()
     {
         var series = BuildRecurringPaycheck(amount: 100m, startDate: YearStart, totalInstallments: 12);
-        var exception = new Paycheck
+        series.Exceptions.Add(new PaycheckException
         {
             Id = Guid.NewGuid(),
-            UserId = UserId,
-            Date = YearStart.AddMonths(1),
+            SeriesId = series.Id,
             OriginalDate = YearStart.AddMonths(1),
-            RecurringPaycheckId = series.Id,
+            Date = YearStart.AddMonths(1),
             Amount = 250m,
             Currency = "USD",
-            Description = "Bonus override",
-        };
-        SetupPaychecks(series, exception);
+        });
+        SetupPaychecks(series);
 
         var result = await _sut.GetResults();
 
@@ -163,12 +161,12 @@ public class DashboardServiceTests
         result.Value.CurrentMonth.PrimaryResult["USD"].Should().Be(0m);
     }
 
-    private void SetupPaychecks(params Paycheck[] paychecks) =>
+    private void SetupPaychecks(params PaycheckSeries[] paychecks) =>
         _paycheckRepository
             .Setup(r => r.GetByUserIdInRange(UserId, It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(paychecks);
 
-    private void SetupInvoices(bool hasInvoices, params Invoice[] invoices)
+    private void SetupInvoices(bool hasInvoices, params InvoiceSeries[] invoices)
     {
         _invoiceRepository
             .Setup(r => r.GetByUserIdInRange(UserId, It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
@@ -178,59 +176,91 @@ public class DashboardServiceTests
             .ReturnsAsync(hasInvoices);
     }
 
-    private void SetupExpenses(params Expense[] expenses) =>
+    private void SetupExpenses(params ExpenseSeries[] expenses) =>
         _expenseRepository
             .Setup(r => r.GetByUserIdInRange(UserId, It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(expenses);
 
-    private static Paycheck BuildPaycheck(decimal amount, DateOnly date) =>
-        new()
+    private static PaycheckSeries BuildPaycheck(decimal amount, DateOnly date)
+    {
+        var series = new PaycheckSeries
         {
             Id = Guid.NewGuid(),
             UserId = UserId,
-            Date = date,
-            Amount = amount,
-            Currency = "USD",
             Description = "Salary",
         };
+        series.Segments.Add(new PaycheckSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            EffectiveFrom = date,
+            Amount = amount,
+            Currency = "USD",
+        });
+        return series;
+    }
 
-    private static Paycheck BuildRecurringPaycheck(decimal amount, DateOnly startDate, int totalInstallments) =>
-        new()
+    private static PaycheckSeries BuildRecurringPaycheck(decimal amount, DateOnly startDate, int totalInstallments)
+    {
+        var series = new PaycheckSeries
         {
             Id = Guid.NewGuid(),
             UserId = UserId,
-            Date = startDate,
+            Description = "Salary",
+        };
+        series.Segments.Add(new PaycheckSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            EffectiveFrom = startDate,
             Amount = amount,
             Currency = "USD",
-            Description = "Salary",
             RecurrenceRule = new RecurrenceRule
             {
                 Frequency = RecurrenceFrequency.Monthly,
                 Interval = 1,
                 TotalInstallments = totalInstallments,
             },
-        };
+        });
+        return series;
+    }
 
-    private static Invoice BuildInvoice(InvoiceType type, decimal amount, DateOnly date) =>
-        new()
+    private static InvoiceSeries BuildInvoice(InvoiceType type, decimal amount, DateOnly date)
+    {
+        var series = new InvoiceSeries
         {
             Id = Guid.NewGuid(),
             UserId = UserId,
-            Date = date,
-            Amount = amount,
-            Currency = "USD",
             Description = type.ToString(),
             Type = type,
         };
+        series.Segments.Add(new InvoiceSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            EffectiveFrom = date,
+            Amount = amount,
+            Currency = "USD",
+        });
+        return series;
+    }
 
-    private static Expense BuildExpense(decimal amount, DateOnly date) =>
-        new()
+    private static ExpenseSeries BuildExpense(decimal amount, DateOnly date)
+    {
+        var series = new ExpenseSeries
         {
             Id = Guid.NewGuid(),
             UserId = UserId,
-            Date = date,
-            Amount = amount,
-            Currency = "USD",
             Description = "Expense",
         };
+        series.Segments.Add(new ExpenseSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            EffectiveFrom = date,
+            Amount = amount,
+            Currency = "USD",
+        });
+        return series;
+    }
 }

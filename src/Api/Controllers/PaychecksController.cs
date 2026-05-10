@@ -27,11 +27,11 @@ public sealed class PaychecksController(IPaycheckService paycheckService) : Erro
         => MatchOk(await paycheckService.GetById(id, cancellationToken));
 
     [HttpPost]
-    public async Task<ActionResult<Paycheck>> Create([FromBody] CreatePaycheckRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<PaycheckSeries>> Create([FromBody] CreatePaycheckRequest request, CancellationToken cancellationToken)
         => MatchOk(await paycheckService.Create(request, cancellationToken));
 
     [HttpPut("{id:guid}")]
-    public async Task<ActionResult<Paycheck>> Update(Guid id, [FromBody] UpdatePaycheckRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<PaycheckSeries>> Update(Guid id, [FromBody] UpdatePaycheckRequest request, CancellationToken cancellationToken)
         => MatchOk(await paycheckService.Update(id, request, cancellationToken));
 
     [HttpDelete("{id:guid}")]
@@ -44,8 +44,8 @@ public sealed class PaychecksController(IPaycheckService paycheckService) : Erro
         => MatchOk(await paycheckService.UpdateOccurrence(id, date, request, cancellationToken));
 
     [HttpPut("{id:guid}/from/{date}")]
-    public async Task<ActionResult<Paycheck>> UpdateFromDate(
-        Guid id, DateOnly date, [FromBody] UpdatePaycheckRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<PaycheckSeries>> UpdateFromDate(
+        Guid id, DateOnly date, [FromBody] UpdatePaycheckFromDateRequest request, CancellationToken cancellationToken)
         => MatchOk(await paycheckService.UpdateFromDate(id, date, request, cancellationToken));
 
     [HttpDelete("{id:guid}/occurrence/{date}")]

@@ -1,6 +1,8 @@
 using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Expense;
+using Application.DTOs.Invoice;
+using Application.DTOs.Paycheck;
 using Application.DTOs.Shared;
 using Application.Services.Currency;
 using Domain.Abstractions;
@@ -19,88 +21,28 @@ public sealed class ExpenseService(
     IUnitOfWork unitOfWork,
     ICurrencyConverter currencyConverter) : IExpenseService
 {
-    public async Task<ErrorOr<IReadOnlyList<ExpenseDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<IReadOnlyList<ExpenseDetailResponse>>> GetAllInRange(
+        DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
-        var expenses = await expenseRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
+        var seriesList = await expenseRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, startDate, endDate, cancellationToken);
 
-        return expenses.Select(e => MapEntityDetail(e, scope)).ToList();
-    }
-
-    public async Task<ErrorOr<CalendarResponse<ExpenseCalendarRow>>> GetCalendar(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
-    {
-        if (startDate > endDate)
-            return RecurrenceErrors.InvalidDateRange;
-
-        var expenses = await expenseRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-
-        var occurrences = await ExpandOccurrences(expenses, startDate, endDate, cancellationToken);
-
-        var expenseLookup = expenses.ToDictionary(e => e.Id);
-
-        var months = new List<string>();
-        var current = new DateOnly(startDate.Year, startDate.Month, 1);
-        var end = new DateOnly(endDate.Year, endDate.Month, 1);
-        while (current <= end)
-        {
-            months.Add(current.ToString("yyyy-MM"));
-            current = current.AddMonths(1);
-        }
-
-        var rows = occurrences
-            .GroupBy(o => o.RecurringExpenseId ?? o.Id)
-            .Select(g =>
-            {
-                var first = g.First();
-                var seriesEntity = expenseLookup.GetValueOrDefault(g.Key);
-                var monthDict = g
-                    .GroupBy(o => o.Date.ToString("yyyy-MM"))
-                    .ToDictionary(
-                        mg => mg.Key,
-                        mg => (IReadOnlyList<ExpenseResponse>)[.. mg.OrderBy(o => o.Date)]);
-
-                var category = seriesEntity?.Category;
-                var source = seriesEntity?.Paycheck is not null
-                    ? new ExpenseSourceInfo(seriesEntity.Paycheck.Id, seriesEntity.Paycheck.Description, seriesEntity.Paycheck.Amount, "Paycheck")
-                    : seriesEntity?.Invoice is not null
-                    ? new ExpenseSourceInfo(seriesEntity.Invoice.Id, seriesEntity.Invoice.Description, seriesEntity.Invoice.Amount, "Invoice")
-                    : null;
-
-                return new ExpenseCalendarRow(
-                    ExpenseId: g.Key,
-                    Description: first.Description,
-                    Category: category is null ? null : new ExpenseCategoryInfo(category.Id, category.Name, category.Color),
-                    Source: source,
-                    IsRecurring: first.IsRecurring,
-                    Recurrence: first.Recurrence,
-                    Occurrences: monthDict);
-            })
-            .ToList();
-
-        var totals = months
-            .Select(m => SumByCurrency(rows
-                .Where(r => r.Occurrences.ContainsKey(m))
-                .SelectMany(r => r.Occurrences[m])))
-            .ToList();
-
-        return new CalendarResponse<ExpenseCalendarRow>(months, rows, totals);
+        return seriesList.Select(MapDetail).ToList();
     }
 
     public async Task<ErrorOr<ExpenseDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default)
     {
-        var expense = await expenseRepository.GetById(id, cancellationToken);
-        if (expense is null || expense.UserId != currentUserProvider.UserId)
+        var series = await expenseRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
 
-        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
-
-        return MapEntityDetail(expense, scope);
+        return MapDetail(series);
     }
 
-    public async Task<ErrorOr<Expense>> Create(CreateExpenseRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<ExpenseSeries>> Create(CreateExpenseRequest request, CancellationToken cancellationToken = default)
     {
         if (request.Recurrence is not null)
         {
@@ -110,181 +52,154 @@ public sealed class ExpenseService(
                 return RecurrenceErrors.EndDateBeforeStart;
         }
 
-        var expense = new Expense
+        var series = new ExpenseSeries
         {
             UserId = currentUserProvider.UserId,
-            Date = request.Date,
-            Amount = request.Amount,
-            Currency = request.Currency,
             Description = request.Description,
             CategoryId = request.CategoryId,
-            PaycheckId = request.PaycheckId,
-            InvoiceId = request.InvoiceId,
-            RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
+            Segments =
             {
-                Frequency = request.Recurrence.Frequency,
-                Interval = request.Recurrence.Interval,
-                EndDate = request.Recurrence.EndDate,
-                TotalInstallments = request.Recurrence.TotalInstallments
+                new ExpenseSegment
+                {
+                    EffectiveFrom = request.Date,
+                    Amount = request.Amount,
+                    Currency = request.Currency,
+                    PaycheckSeriesId = request.PaycheckSeriesId,
+                    InvoiceSeriesId = request.InvoiceSeriesId,
+                    RecurrenceRule = MapRecurrence(request.Recurrence)
+                }
             }
         };
 
-        await expenseRepository.Add(expense, cancellationToken);
+        await expenseRepository.Add(series, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return expense;
+        return series;
     }
 
-    public async Task<ErrorOr<Expense>> Update(Guid id, UpdateExpenseRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<ExpenseSeries>> Update(Guid id, UpdateExpenseRequest request, CancellationToken cancellationToken = default)
     {
-        var expense = await expenseRepository.GetById(id, cancellationToken);
-        if (expense is null || expense.UserId != currentUserProvider.UserId)
+        var series = await expenseRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
 
-        if (request.Recurrence is not null)
-        {
-            if (request.Recurrence.Interval < 1)
-                return RecurrenceErrors.InvalidInterval;
-            if (request.Recurrence.EndDate.HasValue && request.Recurrence.EndDate.Value < request.Date)
-                return RecurrenceErrors.EndDateBeforeStart;
-        }
+        series.Description = request.Description;
+        series.CategoryId = request.CategoryId;
 
-        expense.Date = request.Date;
-        expense.Amount = request.Amount;
-        expense.Currency = request.Currency;
-        expense.Description = request.Description;
-        expense.CategoryId = request.CategoryId;
-        expense.PaycheckId = request.PaycheckId;
-        expense.InvoiceId = request.InvoiceId;
-        expense.RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
-        {
-            Frequency = request.Recurrence.Frequency,
-            Interval = request.Recurrence.Interval,
-            EndDate = request.Recurrence.EndDate,
-            TotalInstallments = request.Recurrence.TotalInstallments
-        };
-
-        expenseRepository.Update(expense);
+        expenseRepository.Update(series);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return expense;
+        return series;
     }
 
     public async Task<ErrorOr<Deleted>> Delete(Guid id, CancellationToken cancellationToken = default)
     {
-        var expense = await expenseRepository.GetById(id, cancellationToken);
-        if (expense is null || expense.UserId != currentUserProvider.UserId)
+        var series = await expenseRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
 
-        expenseRepository.Delete(expense);
+        expenseRepository.Delete(series);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result.Deleted;
     }
 
-    public async Task<ErrorOr<ExpenseResponse>> UpdateOccurrence(Guid id, DateOnly date, UpdateExpenseOccurrenceRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<ExpenseResponse>> UpdateOccurrence(
+        Guid id, DateOnly date, UpdateExpenseOccurrenceRequest request, CancellationToken cancellationToken = default)
     {
         var series = await expenseRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!ExpenseSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        var existing = await expenseRepository.GetException(id, date, cancellationToken);
-        var occurrenceIndex = RecurrenceExpander.GetOccurrenceIndex(series.Date, series.RecurrenceRule, date);
+        var segment = ExpenseSeriesExpander.GetSegmentForDate(series, date)!;
+        var occurrenceIndex = segment.RecurrenceRule is null
+            ? 0
+            : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
 
+        var existing = await expenseRepository.GetException(series.Id, date, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
+        ExpenseException exception;
         if (existing is not null)
         {
-            existing.Date = request.Date ?? date;
-            existing.Amount = request.Amount ?? series.Amount;
-            existing.Currency = request.Currency ?? series.Currency;
-            existing.Description = request.Description ?? series.Description;
-            existing.CategoryId = request.CategoryId ?? series.CategoryId;
-            existing.PaycheckId = request.PaycheckId ?? series.PaycheckId;
-            existing.InvoiceId = request.InvoiceId ?? series.InvoiceId;
+            existing.Date = request.Date;
+            existing.Amount = request.Amount;
+            existing.Currency = request.Currency;
             existing.IsDeleted = false;
 
-            expenseRepository.Update(existing);
-            await unitOfWork.SaveChangesAsync(cancellationToken);
-
-            return MapOverride(existing, series, occurrenceIndex, scope);
-        }
-
-        var exception = new Expense
-        {
-            UserId = currentUserProvider.UserId,
-            Date = request.Date ?? date,
-            Amount = request.Amount ?? series.Amount,
-            Currency = request.Currency ?? series.Currency,
-            Description = request.Description ?? series.Description,
-            CategoryId = request.CategoryId ?? series.CategoryId,
-            PaycheckId = request.PaycheckId ?? series.PaycheckId,
-            InvoiceId = request.InvoiceId ?? series.InvoiceId,
-            RecurringExpenseId = id,
-            OriginalDate = date
-        };
-
-        await expenseRepository.Add(exception, cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-
-        return MapOverride(exception, series, occurrenceIndex, scope);
-    }
-
-    public async Task<ErrorOr<Expense>> UpdateFromDate(Guid id, DateOnly date, UpdateExpenseRequest request, CancellationToken cancellationToken = default)
-    {
-        var series = await expenseRepository.GetById(id, cancellationToken);
-        if (series is null || series.UserId != currentUserProvider.UserId)
-            return ExpenseErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
-        if (request.Recurrence is not null && request.Recurrence.Interval < 1)
-            return RecurrenceErrors.InvalidInterval;
-
-        var previousDate = RecurrenceExpander.GetPreviousOccurrence(series.Date, series.RecurrenceRule, date);
-        series.RecurrenceRule.EndDate = previousDate;
-
-        if (previousDate is null)
-        {
-            expenseRepository.Delete(series);
+            expenseRepository.UpdateException(existing);
+            exception = existing;
         }
         else
         {
-            expenseRepository.Update(series);
+            exception = new ExpenseException
+            {
+                SeriesId = series.Id,
+                OriginalDate = date,
+                Date = request.Date,
+                Amount = request.Amount,
+                Currency = request.Currency,
+                IsDeleted = false
+            };
+            await expenseRepository.AddException(exception, cancellationToken);
         }
 
-        await expenseRepository.DeleteExceptionsFromDate(id, date, cancellationToken);
-
-        var recurrence = request.Recurrence;
-        var newSeries = new Expense
-        {
-            UserId = currentUserProvider.UserId,
-            Date = request.Date,
-            Amount = request.Amount,
-            Currency = request.Currency,
-            Description = request.Description,
-            CategoryId = request.CategoryId,
-            PaycheckId = request.PaycheckId,
-            InvoiceId = request.InvoiceId,
-            RecurrenceRule = recurrence is null ? null : new RecurrenceRule
-            {
-                Frequency = recurrence.Frequency,
-                Interval = recurrence.Interval,
-                EndDate = recurrence.EndDate,
-                TotalInstallments = recurrence.TotalInstallments
-            }
-        };
-
-        await expenseRepository.Add(newSeries, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return newSeries;
+        var occurrence = new ExpenseOccurrence(
+            Date: exception.Date ?? date,
+            OriginalDate: date,
+            Segment: segment,
+            Exception: exception,
+            OccurrenceIndex: occurrenceIndex);
+
+        return MapOccurrence(occurrence, series, scope);
+    }
+
+    public async Task<ErrorOr<ExpenseSeries>> UpdateFromDate(
+        Guid id, DateOnly date, UpdateExpenseFromDateRequest request, CancellationToken cancellationToken = default)
+    {
+        var series = await expenseRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
+            return ExpenseErrors.NotFound;
+
+        if (!ExpenseSeriesExpander.IsValidOccurrence(series, date))
+            return RecurrenceErrors.InvalidOccurrenceDate;
+
+        if (request.Recurrence is not null)
+        {
+            if (request.Recurrence.Interval < 1)
+                return RecurrenceErrors.InvalidInterval;
+            if (request.Recurrence.EndDate.HasValue && request.Recurrence.EndDate.Value < date)
+                return RecurrenceErrors.EndDateBeforeStart;
+        }
+
+        var segment = ExpenseSeriesExpander.GetSegmentForDate(series, date)!;
+
+        unitOfWork.BeginTransaction();
+        CapOrDeleteSegment(segment, date);
+
+        await expenseRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
+        await expenseRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+
+        var newSegment = new ExpenseSegment
+        {
+            SeriesId = series.Id,
+            EffectiveFrom = date,
+            Amount = request.Amount,
+            Currency = request.Currency,
+            PaycheckSeriesId = request.PaycheckSeriesId,
+            InvoiceSeriesId = request.InvoiceSeriesId,
+            RecurrenceRule = MapRecurrence(request.Recurrence)
+        };
+
+        await expenseRepository.AddSegment(newSegment, cancellationToken);
+        await unitOfWork.CommitAsync(cancellationToken);
+
+        return (await expenseRepository.GetById(series.Id, cancellationToken))!;
     }
 
     public async Task<ErrorOr<Deleted>> DeleteOccurrence(Guid id, DateOnly date, CancellationToken cancellationToken = default)
@@ -292,32 +207,29 @@ public sealed class ExpenseService(
         var series = await expenseRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!ExpenseSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        var existing = await expenseRepository.GetException(id, date, cancellationToken);
+        var existing = await expenseRepository.GetException(series.Id, date, cancellationToken);
 
         if (existing is not null)
         {
             existing.IsDeleted = true;
-            expenseRepository.Update(existing);
+            existing.Date = null;
+            existing.Amount = null;
+            existing.Currency = null;
+            expenseRepository.UpdateException(existing);
         }
         else
         {
-            var exception = new Expense
+            var exception = new ExpenseException
             {
-                UserId = currentUserProvider.UserId,
-                Date = date,
-                Amount = series.Amount,
-                Currency = series.Currency,
-                Description = series.Description,
-                RecurringExpenseId = id,
+                SeriesId = series.Id,
                 OriginalDate = date,
                 IsDeleted = true
             };
-            await expenseRepository.Add(exception, cancellationToken);
+            await expenseRepository.AddException(exception, cancellationToken);
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -329,77 +241,142 @@ public sealed class ExpenseService(
         var series = await expenseRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!ExpenseSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        var previousDate = RecurrenceExpander.GetPreviousOccurrence(series.Date, series.RecurrenceRule, date);
+        var segment = ExpenseSeriesExpander.GetSegmentForDate(series, date)!;
 
-        await expenseRepository.DeleteExceptionsFromDate(id, date, cancellationToken);
+        unitOfWork.BeginTransaction();
+        CapOrDeleteSegment(segment, date);
 
-        if (previousDate is null)
+        await expenseRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
+        await expenseRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+
+        await unitOfWork.CommitAsync(cancellationToken);
+
+        var refreshed = await expenseRepository.GetById(series.Id, cancellationToken);
+        if (refreshed is not null && refreshed.Segments.Count == 0)
         {
-            expenseRepository.Delete(series);
-        }
-        else
-        {
-            series.RecurrenceRule.EndDate = previousDate;
-            expenseRepository.Update(series);
+            expenseRepository.Delete(refreshed);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        await unitOfWork.SaveChangesAsync(cancellationToken);
         return Result.Deleted;
     }
 
-    private async Task<List<ExpenseResponse>> ExpandOccurrences(IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken)
+    public async Task<ErrorOr<CalendarResponse<ExpenseCalendarRow>>> GetCalendar(
+        DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
-        var oneOffs = new List<Expense>();
-        var series = new List<Expense>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Expense>();
+        if (startDate > endDate)
+            return RecurrenceErrors.InvalidDateRange;
 
-        foreach (var e in expenses)
-        {
-            if (e.RecurrenceRule is not null)
-                series.Add(e);
-            else if (e.RecurringExpenseId.HasValue && e.OriginalDate.HasValue)
-                exceptionLookup[(e.RecurringExpenseId.Value, e.OriginalDate.Value)] = e;
-            else
-                oneOffs.Add(e);
-        }
-
+        var seriesList = await expenseRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, startDate, endDate, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
-        var results = new List<ExpenseResponse>();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        foreach (var oneOff in oneOffs)
+        var months = new List<string>();
+        var current = new DateOnly(startDate.Year, startDate.Month, 1);
+        var end = new DateOnly(endDate.Year, endDate.Month, 1);
+        while (current <= end)
         {
-            results.Add(MapOneOff(oneOff, scope));
+            months.Add(current.ToString("yyyy-MM"));
+            current = current.AddMonths(1);
         }
 
-        foreach (var s in series)
+        var rows = new List<ExpenseCalendarRow>();
+        foreach (var series in seriesList)
         {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
+            var occurrences = ExpenseSeriesExpander.Expand(series, startDate, endDate);
+            if (occurrences.Count == 0) continue;
 
-            foreach (var (date, index) in occurrences)
-            {
-                var key = (s.Id, date);
-                if (exceptionLookup.TryGetValue(key, out var exception))
-                {
-                    if (exception.IsDeleted)
-                        continue;
+            var responses = occurrences
+                .Select(o => MapOccurrence(o, series, scope))
+                .OrderBy(r => r.Date)
+                .ToList();
 
-                    results.Add(MapOverride(exception, s, index, scope));
-                }
-                else
-                {
-                    results.Add(MapVirtual(s, date, index, scope));
-                }
-            }
+            var monthDict = responses
+                .GroupBy(r => r.Date.ToString("yyyy-MM"))
+                .ToDictionary(
+                    g => g.Key,
+                    g => (IReadOnlyList<ExpenseResponse>)[.. g.OrderBy(o => o.Date)]);
+
+            var activeSegment = ExpenseSeriesExpander.GetActiveSegment(series, today);
+            var isRecurring = series.Segments.Any(s => s.RecurrenceRule is not null);
+            var recurrence = activeSegment?.RecurrenceRule is null
+                ? null
+                : new RecurrenceInfo(
+                    activeSegment.EffectiveFrom,
+                    activeSegment.RecurrenceRule.Frequency,
+                    activeSegment.RecurrenceRule.Interval,
+                    activeSegment.RecurrenceRule.EndDate,
+                    activeSegment.RecurrenceRule.TotalInstallments);
+
+            var category = series.Category;
+            var source = activeSegment?.PaycheckSeries is not null
+                ? new ExpenseSourceInfo(
+                    activeSegment.PaycheckSeries.Id,
+                    activeSegment.PaycheckSeries.Description,
+                    0m,
+                    "Paycheck")
+                : activeSegment?.InvoiceSeries is not null
+                ? new ExpenseSourceInfo(
+                    activeSegment.InvoiceSeries.Id,
+                    activeSegment.InvoiceSeries.Description,
+                    0m,
+                    "Invoice")
+                : null;
+
+            rows.Add(new ExpenseCalendarRow(
+                ExpenseId: series.Id,
+                Description: series.Description,
+                Category: category is null ? null : new ExpenseCategoryInfo(category.Id, category.Name, category.Color),
+                Source: source,
+                IsRecurring: isRecurring,
+                Recurrence: recurrence,
+                Occurrences: monthDict));
         }
 
-        results.Sort((a, b) => a.Date.CompareTo(b.Date));
-        return results;
+        var totals = months
+            .Select(m => SumByCurrency(rows
+                .Where(r => r.Occurrences.ContainsKey(m))
+                .SelectMany(r => r.Occurrences[m])))
+            .ToList();
+
+        return new CalendarResponse<ExpenseCalendarRow>(months, rows, totals);
     }
+
+    private void CapOrDeleteSegment(ExpenseSegment segment, DateOnly boundary)
+    {
+        if (segment.RecurrenceRule is null)
+        {
+            expenseRepository.DeleteSegment(segment);
+            return;
+        }
+
+        var previous = RecurrenceExpander.GetPreviousOccurrence(segment.EffectiveFrom, segment.RecurrenceRule, boundary);
+        if (previous is null)
+        {
+            expenseRepository.DeleteSegment(segment);
+        }
+        else
+        {
+            segment.RecurrenceRule.EndDate = previous;
+            expenseRepository.UpdateSegment(segment);
+        }
+    }
+
+    private static RecurrenceRule? MapRecurrence(CreateRecurrenceRequest? request) =>
+        request is null
+            ? null
+            : new RecurrenceRule
+            {
+                Frequency = request.Frequency,
+                Interval = request.Interval,
+                EndDate = request.EndDate,
+                TotalInstallments = request.TotalInstallments
+            };
 
     private static IReadOnlyDictionary<string, decimal> SumByCurrency(IEnumerable<ExpenseResponse> occurrences)
     {
@@ -414,90 +391,72 @@ public sealed class ExpenseService(
         return totals;
     }
 
-    private static ExpenseDetailResponse MapEntityDetail(Expense expense, CurrencyScope scope) =>
-        new(
-            Id: expense.Id,
-            UserId: expense.UserId,
-            Date: expense.Date,
-            Amount: expense.Amount,
-            Currency: expense.Currency,
-            Description: expense.Description,
-            CategoryId: expense.CategoryId,
-            PaycheckId: expense.PaycheckId,
-            InvoiceId: expense.InvoiceId,
-            RecurrenceRule: expense.RecurrenceRule,
-            RecurringExpenseId: expense.RecurringExpenseId,
-            OriginalDate: expense.OriginalDate,
-            IsDeleted: expense.IsDeleted,
-            Category: expense.Category,
-            Paycheck: expense.Paycheck,
-            Invoice: expense.Invoice,
-            Amounts: scope.ConvertToDisplay(expense.Amount, expense.Currency, expense.Date));
-
-    private static ExpenseResponse MapOneOff(Expense expense, CurrencyScope scope) =>
-        new(
-            Id: expense.Id,
-            Date: expense.Date,
-            Amount: expense.Amount,
-            Currency: expense.Currency,
-            Amounts: scope.ConvertToDisplay(expense.Amount, expense.Currency, expense.Date),
-            Description: expense.Description,
-            CategoryId: expense.CategoryId,
-            PaycheckId: expense.PaycheckId,
-            InvoiceId: expense.InvoiceId,
-            IsRecurring: false,
-            RecurringExpenseId: null,
-            OriginalDate: null,
-            IsOverride: false,
-            Recurrence: null,
-            InstallmentNumber: null,
-            TotalInstallments: null);
-
-    private static ExpenseResponse MapVirtual(Expense series, DateOnly date, int occurrenceIndex, CurrencyScope scope) =>
+    private static ExpenseDetailResponse MapDetail(ExpenseSeries series) =>
         new(
             Id: series.Id,
-            Date: date,
-            Amount: series.Amount,
-            Currency: series.Currency,
-            Amounts: scope.ConvertToDisplay(series.Amount, series.Currency, date),
+            UserId: series.UserId,
             Description: series.Description,
             CategoryId: series.CategoryId,
-            PaycheckId: series.PaycheckId,
-            InvoiceId: series.InvoiceId,
-            IsRecurring: true,
-            RecurringExpenseId: series.Id,
-            OriginalDate: null,
-            IsOverride: false,
-            Recurrence: new RecurrenceInfo(
-                series.Date,
-                series.RecurrenceRule!.Frequency,
-                series.RecurrenceRule.Interval,
-                series.RecurrenceRule.EndDate,
-                series.RecurrenceRule.TotalInstallments),
-            InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
-            TotalInstallments: series.RecurrenceRule.TotalInstallments);
+            Category: series.Category,
+            Segments: series.Segments
+                .OrderBy(s => s.EffectiveFrom)
+                .Select(s => new ExpenseSegmentResponse(
+                    Id: s.Id,
+                    EffectiveFrom: s.EffectiveFrom,
+                    Amount: s.Amount,
+                    Currency: s.Currency,
+                    RecurrenceRule: s.RecurrenceRule,
+                    PaycheckSeriesId: s.PaycheckSeriesId,
+                    PaycheckSeries: s.PaycheckSeries is null
+                        ? null
+                        : new PaycheckSummary(s.PaycheckSeries.Id, s.PaycheckSeries.Description),
+                    InvoiceSeriesId: s.InvoiceSeriesId,
+                    InvoiceSeries: s.InvoiceSeries is null
+                        ? null
+                        : new InvoiceSummary(s.InvoiceSeries.Id, s.InvoiceSeries.Description, s.InvoiceSeries.Type)))
+                .ToList(),
+            Exceptions: series.Exceptions
+                .OrderBy(e => e.OriginalDate)
+                .Select(e => new ExpenseExceptionResponse(
+                    Id: e.Id,
+                    OriginalDate: e.OriginalDate,
+                    Date: e.Date,
+                    Amount: e.Amount,
+                    Currency: e.Currency,
+                    IsDeleted: e.IsDeleted))
+                .ToList());
 
-    private static ExpenseResponse MapOverride(Expense exception, Expense series, int occurrenceIndex, CurrencyScope scope) =>
-        new(
-            Id: exception.Id,
-            Date: exception.Date,
-            Amount: exception.Amount,
-            Currency: exception.Currency,
-            Amounts: scope.ConvertToDisplay(exception.Amount, exception.Currency, exception.Date),
-            Description: exception.Description,
-            CategoryId: exception.CategoryId,
-            PaycheckId: exception.PaycheckId,
-            InvoiceId: exception.InvoiceId,
-            IsRecurring: true,
-            RecurringExpenseId: exception.RecurringExpenseId,
-            OriginalDate: exception.OriginalDate,
-            IsOverride: true,
-            Recurrence: new RecurrenceInfo(
-                series.Date,
-                series.RecurrenceRule!.Frequency,
-                series.RecurrenceRule.Interval,
-                series.RecurrenceRule.EndDate,
-                series.RecurrenceRule.TotalInstallments),
-            InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
-            TotalInstallments: series.RecurrenceRule.TotalInstallments);
+    private static ExpenseResponse MapOccurrence(ExpenseOccurrence occurrence, ExpenseSeries series, CurrencyScope scope)
+    {
+        var segment = occurrence.Segment;
+        var amount = occurrence.Exception?.Amount ?? segment.Amount;
+        var currency = occurrence.Exception?.Currency ?? segment.Currency;
+        var date = occurrence.Date;
+        var hasInstallments = segment.RecurrenceRule?.TotalInstallments is not null;
+
+        return new ExpenseResponse(
+            Id: occurrence.Exception?.Id ?? series.Id,
+            Date: date,
+            Amount: amount,
+            Currency: currency,
+            Amounts: scope.ConvertToDisplay(amount, currency, date),
+            Description: series.Description,
+            CategoryId: series.CategoryId,
+            PaycheckSeriesId: segment.PaycheckSeriesId,
+            InvoiceSeriesId: segment.InvoiceSeriesId,
+            IsRecurring: segment.RecurrenceRule is not null,
+            RecurringExpenseId: segment.RecurrenceRule is not null ? series.Id : null,
+            OriginalDate: occurrence.Exception is null ? null : occurrence.OriginalDate,
+            IsOverride: occurrence.Exception is not null,
+            Recurrence: segment.RecurrenceRule is null
+                ? null
+                : new RecurrenceInfo(
+                    segment.EffectiveFrom,
+                    segment.RecurrenceRule.Frequency,
+                    segment.RecurrenceRule.Interval,
+                    segment.RecurrenceRule.EndDate,
+                    segment.RecurrenceRule.TotalInstallments),
+            InstallmentNumber: hasInstallments ? occurrence.OccurrenceIndex + 1 : null,
+            TotalInstallments: segment.RecurrenceRule?.TotalInstallments);
+    }
 }

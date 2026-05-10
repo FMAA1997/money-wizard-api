@@ -5,12 +5,21 @@ namespace Application.DTOs.Paycheck;
 public sealed record PaycheckDetailResponse(
     Guid Id,
     Guid UserId,
-    DateOnly Date,
+    string Description,
+    IReadOnlyList<PaycheckSegmentResponse> Segments,
+    IReadOnlyList<PaycheckExceptionResponse> Exceptions);
+
+public sealed record PaycheckSegmentResponse(
+    Guid Id,
+    DateOnly EffectiveFrom,
     decimal Amount,
     string Currency,
-    string Description,
-    RecurrenceRule? RecurrenceRule,
-    Guid? RecurringPaycheckId,
-    DateOnly? OriginalDate,
-    bool IsDeleted,
-    IReadOnlyDictionary<string, decimal> Amounts);
+    RecurrenceRule? RecurrenceRule);
+
+public sealed record PaycheckExceptionResponse(
+    Guid Id,
+    DateOnly OriginalDate,
+    DateOnly? Date,
+    decimal? Amount,
+    string? Currency,
+    bool IsDeleted);

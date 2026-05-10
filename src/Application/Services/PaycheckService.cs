@@ -19,29 +19,28 @@ public sealed class PaycheckService(
     IUnitOfWork unitOfWork,
     ICurrencyConverter currencyConverter) : IPaycheckService
 {
-    public async Task<ErrorOr<IReadOnlyList<PaycheckDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<IReadOnlyList<PaycheckDetailResponse>>> GetAllInRange(
+        DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
-        var paychecks = await paycheckRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
+        var seriesList = await paycheckRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, startDate, endDate, cancellationToken);
 
-        return paychecks.Select(p => MapEntityDetail(p, scope)).ToList();
+        return seriesList.Select(MapDetail).ToList();
     }
 
     public async Task<ErrorOr<PaycheckDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default)
     {
-        var paycheck = await paycheckRepository.GetById(id, cancellationToken);
-        if (paycheck is null || paycheck.UserId != currentUserProvider.UserId)
+        var series = await paycheckRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
-
-        return MapEntityDetail(paycheck, scope);
+        return MapDetail(series);
     }
 
-    public async Task<ErrorOr<Paycheck>> Create(CreatePaycheckRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<PaycheckSeries>> Create(CreatePaycheckRequest request, CancellationToken cancellationToken = default)
     {
         if (request.Recurrence is not null)
         {
@@ -51,162 +50,148 @@ public sealed class PaycheckService(
                 return RecurrenceErrors.EndDateBeforeStart;
         }
 
-        var paycheck = new Paycheck
+        var series = new PaycheckSeries
         {
             UserId = currentUserProvider.UserId,
-            Date = request.Date,
-            Amount = request.Amount,
-            Currency = request.Currency,
             Description = request.Description,
-            RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
+            Segments =
             {
-                Frequency = request.Recurrence.Frequency,
-                Interval = request.Recurrence.Interval,
-                EndDate = request.Recurrence.EndDate,
-                TotalInstallments = request.Recurrence.TotalInstallments
+                new PaycheckSegment
+                {
+                    EffectiveFrom = request.Date,
+                    Amount = request.Amount,
+                    Currency = request.Currency,
+                    RecurrenceRule = MapRecurrence(request.Recurrence)
+                }
             }
         };
 
-        await paycheckRepository.Add(paycheck, cancellationToken);
+        await paycheckRepository.Add(series, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return paycheck;
+        return series;
     }
 
-    public async Task<ErrorOr<Paycheck>> Update(Guid id, UpdatePaycheckRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<PaycheckSeries>> Update(Guid id, UpdatePaycheckRequest request, CancellationToken cancellationToken = default)
     {
-        var paycheck = await paycheckRepository.GetById(id, cancellationToken);
-        if (paycheck is null || paycheck.UserId != currentUserProvider.UserId)
+        var series = await paycheckRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        if (request.Recurrence is not null)
-        {
-            if (request.Recurrence.Interval < 1)
-                return RecurrenceErrors.InvalidInterval;
-            if (request.Recurrence.EndDate.HasValue && request.Recurrence.EndDate.Value < request.Date)
-                return RecurrenceErrors.EndDateBeforeStart;
-        }
+        series.Description = request.Description;
 
-        paycheck.Date = request.Date;
-        paycheck.Amount = request.Amount;
-        paycheck.Currency = request.Currency;
-        paycheck.Description = request.Description;
-        paycheck.RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
-        {
-            Frequency = request.Recurrence.Frequency,
-            Interval = request.Recurrence.Interval,
-            EndDate = request.Recurrence.EndDate,
-            TotalInstallments = request.Recurrence.TotalInstallments
-        };
-
-        paycheckRepository.Update(paycheck);
+        paycheckRepository.Update(series);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return paycheck;
+        return series;
     }
 
     public async Task<ErrorOr<Deleted>> Delete(Guid id, CancellationToken cancellationToken = default)
     {
-        var paycheck = await paycheckRepository.GetById(id, cancellationToken);
-        if (paycheck is null || paycheck.UserId != currentUserProvider.UserId)
+        var series = await paycheckRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        paycheckRepository.Delete(paycheck);
+        paycheckRepository.Delete(series);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result.Deleted;
     }
 
-    public async Task<ErrorOr<PaycheckResponse>> UpdateOccurrence(Guid id, DateOnly date, UpdatePaycheckOccurrenceRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<PaycheckResponse>> UpdateOccurrence(
+        Guid id, DateOnly date, UpdatePaycheckOccurrenceRequest request, CancellationToken cancellationToken = default)
     {
         var series = await paycheckRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!PaycheckSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        var existing = await paycheckRepository.GetException(id, date, cancellationToken);
-        var occurrenceIndex = RecurrenceExpander.GetOccurrenceIndex(series.Date, series.RecurrenceRule, date);
+        var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
+        var occurrenceIndex = segment.RecurrenceRule is null
+            ? 0
+            : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
 
+        var existing = await paycheckRepository.GetException(series.Id, date, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
+        PaycheckException exception;
         if (existing is not null)
         {
-            existing.Date = request.Date ?? date;
-            existing.Amount = request.Amount ?? series.Amount;
-            existing.Currency = request.Currency ?? series.Currency;
-            existing.Description = request.Description ?? series.Description;
+            existing.Date = request.Date;
+            existing.Amount = request.Amount;
+            existing.Currency = request.Currency;
             existing.IsDeleted = false;
 
-            paycheckRepository.Update(existing);
-            await unitOfWork.SaveChangesAsync(cancellationToken);
-
-            return MapOverride(existing, series, occurrenceIndex, scope);
+            paycheckRepository.UpdateException(existing);
+            exception = existing;
+        }
+        else
+        {
+            exception = new PaycheckException
+            {
+                SeriesId = series.Id,
+                OriginalDate = date,
+                Date = request.Date,
+                Amount = request.Amount,
+                Currency = request.Currency,
+                IsDeleted = false
+            };
+            await paycheckRepository.AddException(exception, cancellationToken);
         }
 
-        var exception = new Paycheck
-        {
-            UserId = currentUserProvider.UserId,
-            Date = request.Date ?? date,
-            Amount = request.Amount ?? series.Amount,
-            Currency = request.Currency ?? series.Currency,
-            Description = request.Description ?? series.Description,
-            RecurringPaycheckId = id,
-            OriginalDate = date
-        };
-
-        await paycheckRepository.Add(exception, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapOverride(exception, series, occurrenceIndex, scope);
+        var occurrence = new PaycheckOccurrence(
+            Date: exception.Date ?? date,
+            OriginalDate: date,
+            Segment: segment,
+            Exception: exception,
+            OccurrenceIndex: occurrenceIndex);
+
+        return MapOccurrence(occurrence, series, scope);
     }
 
-    public async Task<ErrorOr<Paycheck>> UpdateFromDate(Guid id, DateOnly date, UpdatePaycheckRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<PaycheckSeries>> UpdateFromDate(
+        Guid id, DateOnly date, UpdatePaycheckFromDateRequest request, CancellationToken cancellationToken = default)
     {
         var series = await paycheckRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!PaycheckSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        if (request.Recurrence is not null && request.Recurrence.Interval < 1)
-            return RecurrenceErrors.InvalidInterval;
-
-        var previousDate = RecurrenceExpander.GetPreviousOccurrence(series.Date, series.RecurrenceRule, date);
-        series.RecurrenceRule.EndDate = previousDate;
-
-        if (previousDate is null)
-            paycheckRepository.Delete(series);
-        else
-            paycheckRepository.Update(series);
-
-        await paycheckRepository.DeleteExceptionsFromDate(id, date, cancellationToken);
-
-        var recurrence = request.Recurrence;
-        var newSeries = new Paycheck
+        if (request.Recurrence is not null)
         {
-            UserId = currentUserProvider.UserId,
-            Date = request.Date,
+            if (request.Recurrence.Interval < 1)
+                return RecurrenceErrors.InvalidInterval;
+            if (request.Recurrence.EndDate.HasValue && request.Recurrence.EndDate.Value < date)
+                return RecurrenceErrors.EndDateBeforeStart;
+        }
+
+        var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
+
+        unitOfWork.BeginTransaction();
+        CapOrDeleteSegment(segment, date);
+
+        await paycheckRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
+        await paycheckRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+
+        var newSegment = new PaycheckSegment
+        {
+            SeriesId = series.Id,
+            EffectiveFrom = date,
             Amount = request.Amount,
             Currency = request.Currency,
-            Description = request.Description,
-            RecurrenceRule = recurrence is null ? null : new RecurrenceRule
-            {
-                Frequency = recurrence.Frequency,
-                Interval = recurrence.Interval,
-                EndDate = recurrence.EndDate,
-                TotalInstallments = recurrence.TotalInstallments
-            }
+            RecurrenceRule = MapRecurrence(request.Recurrence)
         };
 
-        await paycheckRepository.Add(newSeries, cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        await paycheckRepository.AddSegment(newSegment, cancellationToken);
+        await unitOfWork.CommitAsync(cancellationToken);
 
-        return newSeries;
+        return (await paycheckRepository.GetById(series.Id, cancellationToken))!;
     }
 
     public async Task<ErrorOr<Deleted>> DeleteOccurrence(Guid id, DateOnly date, CancellationToken cancellationToken = default)
@@ -214,32 +199,29 @@ public sealed class PaycheckService(
         var series = await paycheckRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!PaycheckSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        var existing = await paycheckRepository.GetException(id, date, cancellationToken);
+        var existing = await paycheckRepository.GetException(series.Id, date, cancellationToken);
 
         if (existing is not null)
         {
             existing.IsDeleted = true;
-            paycheckRepository.Update(existing);
+            existing.Date = null;
+            existing.Amount = null;
+            existing.Currency = null;
+            paycheckRepository.UpdateException(existing);
         }
         else
         {
-            var exception = new Paycheck
+            var exception = new PaycheckException
             {
-                UserId = currentUserProvider.UserId,
-                Date = date,
-                Amount = series.Amount,
-                Currency = series.Currency,
-                Description = series.Description,
-                RecurringPaycheckId = id,
+                SeriesId = series.Id,
                 OriginalDate = date,
                 IsDeleted = true
             };
-            await paycheckRepository.Add(exception, cancellationToken);
+            await paycheckRepository.AddException(exception, cancellationToken);
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -251,37 +233,38 @@ public sealed class PaycheckService(
         var series = await paycheckRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!PaycheckSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        var previousDate = RecurrenceExpander.GetPreviousOccurrence(series.Date, series.RecurrenceRule, date);
+        var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
+        CapOrDeleteSegment(segment, date);
 
-        await paycheckRepository.DeleteExceptionsFromDate(id, date, cancellationToken);
-
-        if (previousDate is null)
-        {
-            paycheckRepository.Delete(series);
-        }
-        else
-        {
-            series.RecurrenceRule.EndDate = previousDate;
-            paycheckRepository.Update(series);
-        }
+        await paycheckRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
+        await paycheckRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        var refreshed = await paycheckRepository.GetById(series.Id, cancellationToken);
+        if (refreshed is not null && refreshed.Segments.Count == 0)
+        {
+            paycheckRepository.Delete(refreshed);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
         return Result.Deleted;
     }
 
-    public async Task<ErrorOr<CalendarResponse<PaycheckCalendarRow>>> GetCalendar(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<CalendarResponse<PaycheckCalendarRow>>> GetCalendar(
+        DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
-        var paychecks = await paycheckRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-
-        var occurrences = await ExpandOccurrences(paychecks, startDate, endDate, cancellationToken);
+        var seriesList = await paycheckRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, startDate, endDate, cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         var months = new List<string>();
         var current = new DateOnly(startDate.Year, startDate.Month, 1);
@@ -292,25 +275,41 @@ public sealed class PaycheckService(
             current = current.AddMonths(1);
         }
 
-        var rows = occurrences
-            .GroupBy(o => o.RecurringPaycheckId ?? o.Id)
-            .Select(g =>
-            {
-                var first = g.First();
-                var monthDict = g
-                    .GroupBy(o => o.Date.ToString("yyyy-MM"))
-                    .ToDictionary(
-                        mg => mg.Key,
-                        mg => (IReadOnlyList<PaycheckResponse>)[.. mg.OrderBy(o => o.Date)]);
+        var rows = new List<PaycheckCalendarRow>();
+        foreach (var series in seriesList)
+        {
+            var occurrences = PaycheckSeriesExpander.Expand(series, startDate, endDate);
+            if (occurrences.Count == 0) continue;
 
-                return new PaycheckCalendarRow(
-                    PaycheckId: g.Key,
-                    Description: first.Description,
-                    IsRecurring: first.IsRecurring,
-                    Recurrence: first.Recurrence,
-                    Occurrences: monthDict);
-            })
-            .ToList();
+            var responses = occurrences
+                .Select(o => MapOccurrence(o, series, scope))
+                .OrderBy(r => r.Date)
+                .ToList();
+
+            var monthDict = responses
+                .GroupBy(r => r.Date.ToString("yyyy-MM"))
+                .ToDictionary(
+                    g => g.Key,
+                    g => (IReadOnlyList<PaycheckResponse>)[.. g.OrderBy(o => o.Date)]);
+
+            var activeSegment = PaycheckSeriesExpander.GetActiveSegment(series, today);
+            var isRecurring = series.Segments.Any(s => s.RecurrenceRule is not null);
+            var recurrence = activeSegment?.RecurrenceRule is null
+                ? null
+                : new RecurrenceInfo(
+                    activeSegment.EffectiveFrom,
+                    activeSegment.RecurrenceRule.Frequency,
+                    activeSegment.RecurrenceRule.Interval,
+                    activeSegment.RecurrenceRule.EndDate,
+                    activeSegment.RecurrenceRule.TotalInstallments);
+
+            rows.Add(new PaycheckCalendarRow(
+                PaycheckId: series.Id,
+                Description: series.Description,
+                IsRecurring: isRecurring,
+                Recurrence: recurrence,
+                Occurrences: monthDict));
+        }
 
         var totals = months
             .Select(m => SumByCurrency(rows
@@ -321,54 +320,36 @@ public sealed class PaycheckService(
         return new CalendarResponse<PaycheckCalendarRow>(months, rows, totals);
     }
 
-    private async Task<List<PaycheckResponse>> ExpandOccurrences(IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken)
+    private void CapOrDeleteSegment(PaycheckSegment segment, DateOnly boundary)
     {
-        var oneOffs = new List<Paycheck>();
-        var series = new List<Paycheck>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Paycheck>();
-
-        foreach (var p in paychecks)
+        if (segment.RecurrenceRule is null)
         {
-            if (p.RecurrenceRule is not null)
-                series.Add(p);
-            else if (p.RecurringPaycheckId.HasValue && p.OriginalDate.HasValue)
-                exceptionLookup[(p.RecurringPaycheckId.Value, p.OriginalDate.Value)] = p;
-            else
-                oneOffs.Add(p);
+            paycheckRepository.DeleteSegment(segment);
+            return;
         }
 
-        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
-        var results = new List<PaycheckResponse>();
-
-        foreach (var oneOff in oneOffs)
+        var previous = RecurrenceExpander.GetPreviousOccurrence(segment.EffectiveFrom, segment.RecurrenceRule, boundary);
+        if (previous is null)
         {
-            results.Add(MapOneOff(oneOff, scope));
+            paycheckRepository.DeleteSegment(segment);
         }
-
-        foreach (var s in series)
+        else
         {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-
-            foreach (var (date, index) in occurrences)
-            {
-                var key = (s.Id, date);
-                if (exceptionLookup.TryGetValue(key, out var exception))
-                {
-                    if (exception.IsDeleted)
-                        continue;
-
-                    results.Add(MapOverride(exception, s, index, scope));
-                }
-                else
-                {
-                    results.Add(MapVirtual(s, date, index, scope));
-                }
-            }
+            segment.RecurrenceRule.EndDate = previous;
+            paycheckRepository.UpdateSegment(segment);
         }
-
-        results.Sort((a, b) => a.Date.CompareTo(b.Date));
-        return results;
     }
+
+    private static RecurrenceRule? MapRecurrence(CreateRecurrenceRequest? request) =>
+        request is null
+            ? null
+            : new RecurrenceRule
+            {
+                Frequency = request.Frequency,
+                Interval = request.Interval,
+                EndDate = request.EndDate,
+                TotalInstallments = request.TotalInstallments
+            };
 
     private static IReadOnlyDictionary<string, decimal> SumByCurrency(IEnumerable<PaycheckResponse> occurrences)
     {
@@ -383,75 +364,59 @@ public sealed class PaycheckService(
         return totals;
     }
 
-    private static PaycheckDetailResponse MapEntityDetail(Paycheck paycheck, CurrencyScope scope) =>
-        new(
-            Id: paycheck.Id,
-            UserId: paycheck.UserId,
-            Date: paycheck.Date,
-            Amount: paycheck.Amount,
-            Currency: paycheck.Currency,
-            Description: paycheck.Description,
-            RecurrenceRule: paycheck.RecurrenceRule,
-            RecurringPaycheckId: paycheck.RecurringPaycheckId,
-            OriginalDate: paycheck.OriginalDate,
-            IsDeleted: paycheck.IsDeleted,
-            Amounts: scope.ConvertToDisplay(paycheck.Amount, paycheck.Currency, paycheck.Date));
-
-    private static PaycheckResponse MapOneOff(Paycheck paycheck, CurrencyScope scope) =>
-        new(
-            Id: paycheck.Id,
-            Date: paycheck.Date,
-            Amount: paycheck.Amount,
-            Currency: paycheck.Currency,
-            Amounts: scope.ConvertToDisplay(paycheck.Amount, paycheck.Currency, paycheck.Date),
-            Description: paycheck.Description,
-            IsRecurring: false,
-            RecurringPaycheckId: null,
-            OriginalDate: null,
-            IsOverride: false,
-            Recurrence: null,
-            InstallmentNumber: null,
-            TotalInstallments: null);
-
-    private static PaycheckResponse MapVirtual(Paycheck series, DateOnly date, int occurrenceIndex, CurrencyScope scope) =>
+    private static PaycheckDetailResponse MapDetail(PaycheckSeries series) =>
         new(
             Id: series.Id,
-            Date: date,
-            Amount: series.Amount,
-            Currency: series.Currency,
-            Amounts: scope.ConvertToDisplay(series.Amount, series.Currency, date),
+            UserId: series.UserId,
             Description: series.Description,
-            IsRecurring: true,
-            RecurringPaycheckId: series.Id,
-            OriginalDate: null,
-            IsOverride: false,
-            Recurrence: new RecurrenceInfo(
-                series.Date,
-                series.RecurrenceRule!.Frequency,
-                series.RecurrenceRule.Interval,
-                series.RecurrenceRule.EndDate,
-                series.RecurrenceRule.TotalInstallments),
-            InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
-            TotalInstallments: series.RecurrenceRule.TotalInstallments);
+            Segments: series.Segments
+                .OrderBy(s => s.EffectiveFrom)
+                .Select(s => new PaycheckSegmentResponse(
+                    Id: s.Id,
+                    EffectiveFrom: s.EffectiveFrom,
+                    Amount: s.Amount,
+                    Currency: s.Currency,
+                    RecurrenceRule: s.RecurrenceRule))
+                .ToList(),
+            Exceptions: series.Exceptions
+                .OrderBy(e => e.OriginalDate)
+                .Select(e => new PaycheckExceptionResponse(
+                    Id: e.Id,
+                    OriginalDate: e.OriginalDate,
+                    Date: e.Date,
+                    Amount: e.Amount,
+                    Currency: e.Currency,
+                    IsDeleted: e.IsDeleted))
+                .ToList());
 
-    private static PaycheckResponse MapOverride(Paycheck exception, Paycheck series, int occurrenceIndex, CurrencyScope scope) =>
-        new(
-            Id: exception.Id,
-            Date: exception.Date,
-            Amount: exception.Amount,
-            Currency: exception.Currency,
-            Amounts: scope.ConvertToDisplay(exception.Amount, exception.Currency, exception.Date),
-            Description: exception.Description,
-            IsRecurring: true,
-            RecurringPaycheckId: exception.RecurringPaycheckId,
-            OriginalDate: exception.OriginalDate,
-            IsOverride: true,
-            Recurrence: new RecurrenceInfo(
-                series.Date,
-                series.RecurrenceRule!.Frequency,
-                series.RecurrenceRule.Interval,
-                series.RecurrenceRule.EndDate,
-                series.RecurrenceRule.TotalInstallments),
-            InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
-            TotalInstallments: series.RecurrenceRule.TotalInstallments);
+    private static PaycheckResponse MapOccurrence(PaycheckOccurrence occurrence, PaycheckSeries series, CurrencyScope scope)
+    {
+        var segment = occurrence.Segment;
+        var amount = occurrence.Exception?.Amount ?? segment.Amount;
+        var currency = occurrence.Exception?.Currency ?? segment.Currency;
+        var date = occurrence.Date;
+        var hasInstallments = segment.RecurrenceRule?.TotalInstallments is not null;
+
+        return new PaycheckResponse(
+            Id: occurrence.Exception?.Id ?? series.Id,
+            Date: date,
+            Amount: amount,
+            Currency: currency,
+            Amounts: scope.ConvertToDisplay(amount, currency, date),
+            Description: series.Description,
+            IsRecurring: segment.RecurrenceRule is not null,
+            RecurringPaycheckId: segment.RecurrenceRule is not null ? series.Id : null,
+            OriginalDate: occurrence.Exception is null ? null : occurrence.OriginalDate,
+            IsOverride: occurrence.Exception is not null,
+            Recurrence: segment.RecurrenceRule is null
+                ? null
+                : new RecurrenceInfo(
+                    segment.EffectiveFrom,
+                    segment.RecurrenceRule.Frequency,
+                    segment.RecurrenceRule.Interval,
+                    segment.RecurrenceRule.EndDate,
+                    segment.RecurrenceRule.TotalInstallments),
+            InstallmentNumber: hasInstallments ? occurrence.OccurrenceIndex + 1 : null,
+            TotalInstallments: segment.RecurrenceRule?.TotalInstallments);
+    }
 }

@@ -109,22 +109,27 @@ public class InvoiceStatisticsServiceTests
         var periodStart = new DateOnly(today.Year, 1, 1);
 
         var invoice = BuildOneOff(InvoiceType.Invoice, amount: 1000m, date: periodStart);
-        var creditSeries = new Invoice
+        var creditSeries = new InvoiceSeries
         {
             Id = Guid.NewGuid(),
             UserId = UserId,
-            Date = periodStart,
-            Amount = 100m,
-            Currency = "ARS",
             Description = "Monthly CN",
             Type = InvoiceType.CreditNote,
+        };
+        creditSeries.Segments.Add(new InvoiceSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = creditSeries.Id,
+            EffectiveFrom = periodStart,
+            Amount = 100m,
+            Currency = "ARS",
             RecurrenceRule = new RecurrenceRule
             {
                 Frequency = RecurrenceFrequency.Monthly,
                 Interval = 1,
-                TotalInstallments = 3
-            }
-        };
+                TotalInstallments = 3,
+            },
+        });
         SetupInvoices(invoice, creditSeries);
 
         var result = await _sut.GetCategoryProgress();
@@ -133,19 +138,27 @@ public class InvoiceStatisticsServiceTests
         result.Value.ProjectedAmount.Should().Be(700m);
     }
 
-    private static Invoice BuildOneOff(InvoiceType type, decimal amount, DateOnly date) =>
-        new()
+    private static InvoiceSeries BuildOneOff(InvoiceType type, decimal amount, DateOnly date)
+    {
+        var series = new InvoiceSeries
         {
             Id = Guid.NewGuid(),
             UserId = UserId,
-            Date = date,
+            Description = type.ToString(),
+            Type = type,
+        };
+        series.Segments.Add(new InvoiceSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            EffectiveFrom = date,
             Amount = amount,
             Currency = "ARS",
-            Description = type.ToString(),
-            Type = type
-        };
+        });
+        return series;
+    }
 
-    private void SetupInvoices(params Invoice[] invoices)
+    private void SetupInvoices(params InvoiceSeries[] invoices)
     {
         _invoiceRepositoryMock
             .Setup(r => r.GetByUserIdInRange(UserId, It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))

@@ -2,10 +2,19 @@ using Domain.Models;
 
 namespace Domain.Abstractions.Repositories;
 
-public interface IExpenseRepository : IRepository<Expense>
+public interface IExpenseRepository : IRepository<ExpenseSeries>
 {
-    Task<IReadOnlyList<Expense>> GetByUserId(Guid userId, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<Expense>> GetByUserIdInRange(Guid userId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
-    Task<Expense?> GetException(Guid recurringExpenseId, DateOnly originalDate, CancellationToken cancellationToken = default);
-    Task DeleteExceptionsFromDate(Guid recurringExpenseId, DateOnly fromDate, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ExpenseSeries>> GetByUserId(Guid userId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ExpenseSeries>> GetByUserIdInRange(Guid userId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
+
+    Task AddSegment(ExpenseSegment segment, CancellationToken cancellationToken = default);
+    void UpdateSegment(ExpenseSegment segment);
+    void DeleteSegment(ExpenseSegment segment);
+
+    Task AddException(ExpenseException exception, CancellationToken cancellationToken = default);
+    void UpdateException(ExpenseException exception);
+
+    Task<ExpenseException?> GetException(Guid seriesId, DateOnly originalDate, CancellationToken cancellationToken = default);
+    Task DeleteExceptionsFromDate(Guid seriesId, DateOnly fromDate, CancellationToken cancellationToken = default);
+    Task DeleteSegmentsFromDate(Guid seriesId, DateOnly fromDate, CancellationToken cancellationToken = default);
 }

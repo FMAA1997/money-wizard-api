@@ -11,5 +11,5 @@ public sealed class ExpenseCategory : Entity
     [JsonIgnore]
     public User User { get; set; } = null!;
     [JsonIgnore]
-    public ICollection<Expense> Expenses { get; set; } = [];
+    public ICollection<ExpenseSeries> ExpenseSeries { get; set; } = [];
 }

@@ -27,11 +27,11 @@ public sealed class ExpenseController(IExpenseService expenseService) : ErrorCon
         => MatchOk(await expenseService.GetById(id, cancellationToken));
 
     [HttpPost]
-    public async Task<ActionResult<Expense>> Create([FromBody] CreateExpenseRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<ExpenseSeries>> Create([FromBody] CreateExpenseRequest request, CancellationToken cancellationToken)
         => MatchOk(await expenseService.Create(request, cancellationToken));
 
     [HttpPut("{id:guid}")]
-    public async Task<ActionResult<Expense>> Update(Guid id, [FromBody] UpdateExpenseRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<ExpenseSeries>> Update(Guid id, [FromBody] UpdateExpenseRequest request, CancellationToken cancellationToken)
         => MatchOk(await expenseService.Update(id, request, cancellationToken));
 
     [HttpDelete("{id:guid}")]
@@ -44,8 +44,8 @@ public sealed class ExpenseController(IExpenseService expenseService) : ErrorCon
         => MatchOk(await expenseService.UpdateOccurrence(id, date, request, cancellationToken));
 
     [HttpPut("{id:guid}/from/{date}")]
-    public async Task<ActionResult<Expense>> UpdateFromDate(
-        Guid id, DateOnly date, [FromBody] UpdateExpenseRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<ExpenseSeries>> UpdateFromDate(
+        Guid id, DateOnly date, [FromBody] UpdateExpenseFromDateRequest request, CancellationToken cancellationToken)
         => MatchOk(await expenseService.UpdateFromDate(id, date, request, cancellationToken));
 
     [HttpDelete("{id:guid}/occurrence/{date}")]

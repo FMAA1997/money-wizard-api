@@ -12,7 +12,7 @@ public sealed record InvoiceResponse(
     string Description,
     Guid? Source,
     InvoiceType Type,
-    Guid? ParentInvoiceId,
+    Guid? ParentExceptionId,
     InvoiceClass? Class,
     int? PointOfSale,
     long? Number,

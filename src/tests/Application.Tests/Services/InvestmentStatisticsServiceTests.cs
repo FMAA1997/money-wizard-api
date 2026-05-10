@@ -119,21 +119,21 @@ public class InvestmentStatisticsServiceTests
 
         _expenseRepositoryMock
             .Setup(r => r.GetByUserIdInRange(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<Expense>
+            .ReturnsAsync(new List<ExpenseSeries>
             {
-                new() { UserId = Guid.NewGuid(), Date = oneMonthAgo, Amount = 100m, Currency = "USD", Description = "rent" }
+                BuildOneOffExpenseSeries(oneMonthAgo, 100m, "USD", "rent")
             });
 
         _paycheckRepositoryMock
             .Setup(r => r.GetByUserIdInRange(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<Paycheck>
+            .ReturnsAsync(new List<PaycheckSeries>
             {
-                new() { UserId = Guid.NewGuid(), Date = oneMonthAgo, Amount = 500m, Currency = "USD", Description = "salary" }
+                BuildOneOffPaychecKSeries(oneMonthAgo, 500m, "USD", "salary")
             });
 
         _invoiceRepositoryMock
             .Setup(r => r.GetByUserIdInRange(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<Invoice>());
+            .ReturnsAsync(new List<InvoiceSeries>());
 
         var sut = Build(displayCurrencies: new[] { "USD" }, primary: "USD");
         var result = await sut.GetFinancialIndependence();
@@ -171,19 +171,19 @@ public class InvestmentStatisticsServiceTests
         // expenses > income → negative savings
         _expenseRepositoryMock
             .Setup(r => r.GetByUserIdInRange(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<Expense>
+            .ReturnsAsync(new List<ExpenseSeries>
             {
-                new() { UserId = Guid.NewGuid(), Date = today, Amount = 1000m, Currency = "USD", Description = "x" }
+                BuildOneOffExpenseSeries(today, 1000m, "USD", "x")
             });
         _paycheckRepositoryMock
             .Setup(r => r.GetByUserIdInRange(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<Paycheck>
+            .ReturnsAsync(new List<PaycheckSeries>
             {
-                new() { UserId = Guid.NewGuid(), Date = today, Amount = 500m, Currency = "USD", Description = "y" }
+                BuildOneOffPaychecKSeries(today, 500m, "USD", "y")
             });
         _invoiceRepositoryMock
             .Setup(r => r.GetByUserIdInRange(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<Invoice>());
+            .ReturnsAsync(new List<InvoiceSeries>());
 
         var sut = Build(displayCurrencies: new[] { "USD" }, primary: "USD");
         var result = await sut.GetFinancialIndependence();
@@ -205,13 +205,13 @@ public class InvestmentStatisticsServiceTests
 
         _expenseRepositoryMock
             .Setup(r => r.GetByUserIdInRange(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<Expense>());
+            .ReturnsAsync(new List<ExpenseSeries>());
         _paycheckRepositoryMock
             .Setup(r => r.GetByUserIdInRange(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<Paycheck>());
+            .ReturnsAsync(new List<PaycheckSeries>());
         _invoiceRepositoryMock
             .Setup(r => r.GetByUserIdInRange(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<Invoice>());
+            .ReturnsAsync(new List<InvoiceSeries>());
 
         var sut = Build(displayCurrencies: new[] { "USD" }, primary: "USD");
         var result = await sut.GetFinancialIndependence();
@@ -221,5 +221,43 @@ public class InvestmentStatisticsServiceTests
         result.Value.Expenses.Coverage["USD"].Should().BeNull();
         result.Value.Income.Coverage["USD"].Should().BeNull();
         result.Value.Savings.Coverage["USD"].Should().BeNull();
+    }
+
+    private static PaycheckSeries BuildOneOffPaychecKSeries(DateOnly date, decimal amount, string currency, string description)
+    {
+        var series = new PaycheckSeries
+        {
+            Id = Guid.NewGuid(),
+            UserId = Guid.NewGuid(),
+            Description = description,
+        };
+        series.Segments.Add(new PaycheckSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            EffectiveFrom = date,
+            Amount = amount,
+            Currency = currency,
+        });
+        return series;
+    }
+
+    private static ExpenseSeries BuildOneOffExpenseSeries(DateOnly date, decimal amount, string currency, string description)
+    {
+        var series = new ExpenseSeries
+        {
+            Id = Guid.NewGuid(),
+            UserId = Guid.NewGuid(),
+            Description = description,
+        };
+        series.Segments.Add(new ExpenseSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            EffectiveFrom = date,
+            Amount = amount,
+            Currency = currency,
+        });
+        return series;
     }
 }

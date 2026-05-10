@@ -1,6 +1,7 @@
 using Application.Abstractions;
 using Application.Abstractions.Services;
 using Application.DTOs.Invoice;
+using Application.DTOs.Paycheck;
 using Application.DTOs.Shared;
 using Application.Services.Currency;
 using Domain.Abstractions;
@@ -19,43 +20,48 @@ public sealed class InvoiceService(
     IUnitOfWork unitOfWork,
     ICurrencyConverter currencyConverter) : IInvoiceService
 {
-    public async Task<ErrorOr<IReadOnlyList<InvoiceDetailResponse>>> GetAllInRange(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<IReadOnlyList<InvoiceDetailResponse>>> GetAllInRange(
+        DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
-        var invoices = await invoiceRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
+        var seriesList = await invoiceRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, startDate, endDate, cancellationToken);
 
-        return invoices.Select(i => MapEntityDetail(i, scope)).ToList();
+        return seriesList.Select(MapDetail).ToList();
     }
 
-    public async Task<ErrorOr<IReadOnlyList<InvoiceResponse>>> GetOccurrences(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<IReadOnlyList<InvoiceResponse>>> GetOccurrences(
+        DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
-        var invoices = await invoiceRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
+        var seriesList = await invoiceRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, startDate, endDate, cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var occurrences = await ExpandOccurrences(invoices, startDate, endDate, cancellationToken);
+        var results = new List<InvoiceResponse>();
+        foreach (var series in seriesList)
+        {
+            foreach (var occurrence in InvoiceSeriesExpander.Expand(series, startDate, endDate))
+                results.Add(MapOccurrence(occurrence, series, scope));
+        }
 
-        return occurrences
-            .OrderBy(o => o.Date)
-            .ToList();
+        return results.OrderBy(o => o.Date).ToList();
     }
 
     public async Task<ErrorOr<InvoiceDetailResponse>> GetById(Guid id, CancellationToken cancellationToken = default)
     {
-        var invoice = await invoiceRepository.GetById(id, cancellationToken);
-        if (invoice is null || invoice.UserId != currentUserProvider.UserId)
+        var series = await invoiceRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
-
-        return MapEntityDetail(invoice, scope);
+        return MapDetail(series);
     }
 
-    public async Task<ErrorOr<Invoice>> Create(CreateInvoiceRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<InvoiceSeries>> Create(CreateInvoiceRequest request, CancellationToken cancellationToken = default)
     {
         if (request.Recurrence is not null)
         {
@@ -65,198 +71,165 @@ public sealed class InvoiceService(
                 return RecurrenceErrors.EndDateBeforeStart;
         }
 
-        var parentValidation = await ValidateParent(request.Type, request.ParentInvoiceId, cancellationToken);
-        if (parentValidation is not null)
-            return parentValidation.Value;
+        unitOfWork.BeginTransaction();
 
-        var invoice = new Invoice
+        var parentResolution = await ResolveAndMaterializeParent(
+            request.Type, request.ParentInvoiceSeriesId, request.ParentOriginalDate, cancellationToken);
+        if (parentResolution.IsError)
+        {
+            await unitOfWork.RollbackAsync();
+            return parentResolution.Errors;
+        }
+
+        var series = new InvoiceSeries
         {
             UserId = currentUserProvider.UserId,
-            Date = request.Date,
-            Amount = request.Amount,
-            Currency = request.Currency,
             Description = request.Description,
-            Source = request.Source,
             Type = request.Type,
-            ParentInvoiceId = request.ParentInvoiceId,
             Class = request.Class,
             PointOfSale = request.PointOfSale,
-            Number = request.Number,
-            RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
+            BaseNumber = request.BaseNumber,
+            ParentExceptionId = parentResolution.Value?.Id,
+            Segments =
             {
-                Frequency = request.Recurrence.Frequency,
-                Interval = request.Recurrence.Interval,
-                EndDate = request.Recurrence.EndDate,
-                TotalInstallments = request.Recurrence.TotalInstallments
+                new InvoiceSegment
+                {
+                    EffectiveFrom = request.Date,
+                    Amount = request.Amount,
+                    Currency = request.Currency,
+                    Source = request.Source,
+                    RecurrenceRule = MapRecurrence(request.Recurrence)
+                }
             }
         };
 
-        await invoiceRepository.Add(invoice, cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        await invoiceRepository.Add(series, cancellationToken);
+        await unitOfWork.CommitAsync(cancellationToken);
 
-        return invoice;
+        return series;
     }
 
-    public async Task<ErrorOr<Invoice>> Update(Guid id, UpdateInvoiceRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<InvoiceSeries>> Update(Guid id, UpdateInvoiceRequest request, CancellationToken cancellationToken = default)
     {
-        var invoice = await invoiceRepository.GetById(id, cancellationToken);
-        if (invoice is null || invoice.UserId != currentUserProvider.UserId)
+        var series = await invoiceRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        if (request.Recurrence is not null)
-        {
-            if (request.Recurrence.Interval < 1)
-                return RecurrenceErrors.InvalidInterval;
-            if (request.Recurrence.EndDate.HasValue && request.Recurrence.EndDate.Value < request.Date)
-                return RecurrenceErrors.EndDateBeforeStart;
-        }
+        series.Description = request.Description;
+        series.Class = request.Class;
+        series.PointOfSale = request.PointOfSale;
+        series.BaseNumber = request.BaseNumber;
 
-        var parentValidation = await ValidateParent(request.Type, request.ParentInvoiceId, cancellationToken, currentId: id);
-        if (parentValidation is not null)
-            return parentValidation.Value;
-
-        invoice.Date = request.Date;
-        invoice.Amount = request.Amount;
-        invoice.Currency = request.Currency;
-        invoice.Description = request.Description;
-        invoice.Source = request.Source;
-        invoice.Type = request.Type;
-        invoice.ParentInvoiceId = request.ParentInvoiceId;
-        invoice.Class = request.Class;
-        invoice.PointOfSale = request.PointOfSale;
-        invoice.Number = request.Number;
-        invoice.RecurrenceRule = request.Recurrence is null ? null : new RecurrenceRule
-        {
-            Frequency = request.Recurrence.Frequency,
-            Interval = request.Recurrence.Interval,
-            EndDate = request.Recurrence.EndDate,
-            TotalInstallments = request.Recurrence.TotalInstallments
-        };
-
-        invoiceRepository.Update(invoice);
+        invoiceRepository.Update(series);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return invoice;
+        return series;
     }
 
     public async Task<ErrorOr<Deleted>> Delete(Guid id, CancellationToken cancellationToken = default)
     {
-        var invoice = await invoiceRepository.GetById(id, cancellationToken);
-        if (invoice is null || invoice.UserId != currentUserProvider.UserId)
+        var series = await invoiceRepository.GetById(id, cancellationToken);
+        if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        invoiceRepository.Delete(invoice);
+        invoiceRepository.Delete(series);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result.Deleted;
     }
 
-    public async Task<ErrorOr<InvoiceResponse>> UpdateOccurrence(Guid id, DateOnly date, UpdateInvoiceOccurrenceRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<InvoiceResponse>> UpdateOccurrence(
+        Guid id, DateOnly date, UpdateInvoiceOccurrenceRequest request, CancellationToken cancellationToken = default)
     {
         var series = await invoiceRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!InvoiceSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        var existing = await invoiceRepository.GetException(id, date, cancellationToken);
-        var occurrenceIndex = RecurrenceExpander.GetOccurrenceIndex(series.Date, series.RecurrenceRule, date);
-
+        var existing = await invoiceRepository.GetException(series.Id, date, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
+        InvoiceException exception;
         if (existing is not null)
         {
-            existing.Date = request.Date ?? date;
-            existing.Amount = request.Amount ?? series.Amount;
-            existing.Currency = request.Currency ?? series.Currency;
-            existing.Description = request.Description ?? series.Description;
-            existing.Source = request.Source ?? series.Source;
-            existing.Number = request.Number;
+            existing.Date = request.Date;
+            existing.Amount = request.Amount;
+            existing.Currency = request.Currency;
             existing.IsDeleted = false;
+            // Preserve frozen Number if present.
 
-            invoiceRepository.Update(existing);
-            await unitOfWork.SaveChangesAsync(cancellationToken);
+            invoiceRepository.UpdateException(existing);
+            exception = existing;
+        }
+        else
+        {
+            var globalIndex = InvoiceSeriesExpander.GetGlobalOccurrenceIndex(series, date);
+            long? frozenNumber = series.BaseNumber + globalIndex;
 
-            return MapOverride(existing, series, occurrenceIndex, scope);
+            exception = new InvoiceException
+            {
+                SeriesId = series.Id,
+                OriginalDate = date,
+                Date = request.Date,
+                Amount = request.Amount,
+                Currency = request.Currency,
+                Number = frozenNumber,
+                IsDeleted = false
+            };
+            await invoiceRepository.AddException(exception, cancellationToken);
         }
 
-        var exception = new Invoice
-        {
-            UserId = currentUserProvider.UserId,
-            Date = request.Date ?? date,
-            Amount = request.Amount ?? series.Amount,
-            Currency = request.Currency ?? series.Currency,
-            Description = request.Description ?? series.Description,
-            Source = request.Source ?? series.Source,
-            Type = series.Type,
-            ParentInvoiceId = series.ParentInvoiceId,
-            Number = request.Number,
-            RecurringInvoiceId = id,
-            OriginalDate = date
-        };
-
-        await invoiceRepository.Add(exception, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapOverride(exception, series, occurrenceIndex, scope);
+        // Reload to compute the per-occurrence representation through the expander.
+        var refreshed = (await invoiceRepository.GetById(series.Id, cancellationToken))!;
+        var occurrence = InvoiceSeriesExpander.Expand(refreshed, date, date)
+            .First(o => o.OriginalDate == date);
+        return MapOccurrence(occurrence, refreshed, scope);
     }
 
-    public async Task<ErrorOr<Invoice>> UpdateFromDate(Guid id, DateOnly date, UpdateInvoiceRequest request, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<InvoiceSeries>> UpdateFromDate(
+        Guid id, DateOnly date, UpdateInvoiceFromDateRequest request, CancellationToken cancellationToken = default)
     {
         var series = await invoiceRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!InvoiceSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        if (request.Recurrence is not null && request.Recurrence.Interval < 1)
-            return RecurrenceErrors.InvalidInterval;
-
-        var parentValidation = await ValidateParent(request.Type, request.ParentInvoiceId, cancellationToken, currentId: id);
-        if (parentValidation is not null)
-            return parentValidation.Value;
-
-        var previousDate = RecurrenceExpander.GetPreviousOccurrence(series.Date, series.RecurrenceRule, date);
-        series.RecurrenceRule.EndDate = previousDate;
-
-        if (previousDate is null)
-            invoiceRepository.Delete(series);
-        else
-            invoiceRepository.Update(series);
-
-        await invoiceRepository.DeleteExceptionsFromDate(id, date, cancellationToken);
-
-        var recurrence = request.Recurrence;
-        var newSeries = new Invoice
+        if (request.Recurrence is not null)
         {
-            UserId = currentUserProvider.UserId,
-            Date = request.Date,
+            if (request.Recurrence.Interval < 1)
+                return RecurrenceErrors.InvalidInterval;
+            if (request.Recurrence.EndDate.HasValue && request.Recurrence.EndDate.Value < date)
+                return RecurrenceErrors.EndDateBeforeStart;
+        }
+
+        var segment = InvoiceSeriesExpander.GetSegmentForDate(series, date)!;
+
+        unitOfWork.BeginTransaction();
+        CapOrDeleteSegment(segment, date);
+
+        await invoiceRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
+        await invoiceRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+
+        var newSegment = new InvoiceSegment
+        {
+            SeriesId = series.Id,
+            EffectiveFrom = date,
             Amount = request.Amount,
             Currency = request.Currency,
-            Description = request.Description,
             Source = request.Source,
-            Type = request.Type,
-            ParentInvoiceId = request.ParentInvoiceId,
-            Class = request.Class,
-            PointOfSale = request.PointOfSale,
-            Number = request.Number,
-            RecurrenceRule = recurrence is null ? null : new RecurrenceRule
-            {
-                Frequency = recurrence.Frequency,
-                Interval = recurrence.Interval,
-                EndDate = recurrence.EndDate,
-                TotalInstallments = recurrence.TotalInstallments
-            }
+            RecurrenceRule = MapRecurrence(request.Recurrence)
         };
 
-        await invoiceRepository.Add(newSeries, cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        await invoiceRepository.AddSegment(newSegment, cancellationToken);
+        await unitOfWork.CommitAsync(cancellationToken);
 
-        return newSeries;
+        return (await invoiceRepository.GetById(series.Id, cancellationToken))!;
     }
 
     public async Task<ErrorOr<Deleted>> DeleteOccurrence(Guid id, DateOnly date, CancellationToken cancellationToken = default)
@@ -264,34 +237,30 @@ public sealed class InvoiceService(
         var series = await invoiceRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!InvoiceSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        var existing = await invoiceRepository.GetException(id, date, cancellationToken);
+        var existing = await invoiceRepository.GetException(series.Id, date, cancellationToken);
 
         if (existing is not null)
         {
             existing.IsDeleted = true;
-            invoiceRepository.Update(existing);
+            existing.Date = null;
+            existing.Amount = null;
+            existing.Currency = null;
+            // Preserve frozen Number for fiscal record (even though the occurrence is skipped).
+            invoiceRepository.UpdateException(existing);
         }
         else
         {
-            var exception = new Invoice
+            var exception = new InvoiceException
             {
-                UserId = currentUserProvider.UserId,
-                Date = date,
-                Amount = series.Amount,
-                Currency = series.Currency,
-                Description = series.Description,
-                Type = series.Type,
-                ParentInvoiceId = series.ParentInvoiceId,
-                RecurringInvoiceId = id,
+                SeriesId = series.Id,
                 OriginalDate = date,
                 IsDeleted = true
             };
-            await invoiceRepository.Add(exception, cancellationToken);
+            await invoiceRepository.AddException(exception, cancellationToken);
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -303,39 +272,40 @@ public sealed class InvoiceService(
         var series = await invoiceRepository.GetById(id, cancellationToken);
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
-        if (series.RecurrenceRule is null)
-            return RecurrenceErrors.NotRecurring;
-        if (!RecurrenceExpander.IsValidOccurrence(series.Date, series.RecurrenceRule, date))
+
+        if (!InvoiceSeriesExpander.IsValidOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
-        var previousDate = RecurrenceExpander.GetPreviousOccurrence(series.Date, series.RecurrenceRule, date);
+        var segment = InvoiceSeriesExpander.GetSegmentForDate(series, date)!;
 
-        await invoiceRepository.DeleteExceptionsFromDate(id, date, cancellationToken);
+        unitOfWork.BeginTransaction();
+        CapOrDeleteSegment(segment, date);
 
-        if (previousDate is null)
+        await invoiceRepository.DeleteSegmentsFromDate(series.Id, date, cancellationToken);
+        await invoiceRepository.DeleteExceptionsFromDate(series.Id, date, cancellationToken);
+
+        await unitOfWork.CommitAsync(cancellationToken);
+
+        var refreshed = await invoiceRepository.GetById(series.Id, cancellationToken);
+        if (refreshed is not null && refreshed.Segments.Count == 0)
         {
-            invoiceRepository.Delete(series);
-        }
-        else
-        {
-            series.RecurrenceRule.EndDate = previousDate;
-            invoiceRepository.Update(series);
+            invoiceRepository.Delete(refreshed);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        await unitOfWork.SaveChangesAsync(cancellationToken);
         return Result.Deleted;
     }
 
-    public async Task<ErrorOr<CalendarResponse<InvoiceCalendarRow>>> GetCalendar(DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
+    public async Task<ErrorOr<CalendarResponse<InvoiceCalendarRow>>> GetCalendar(
+        DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
         if (startDate > endDate)
             return RecurrenceErrors.InvalidDateRange;
 
-        var invoices = await invoiceRepository.GetByUserIdInRange(currentUserProvider.UserId, startDate, endDate, cancellationToken);
-
-        var occurrences = await ExpandOccurrences(invoices, startDate, endDate, cancellationToken);
-
-        var invoiceLookup = invoices.ToDictionary(i => i.Id);
+        var seriesList = await invoiceRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, startDate, endDate, cancellationToken);
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         var months = new List<string>();
         var current = new DateOnly(startDate.Year, startDate.Month, 1);
@@ -346,33 +316,50 @@ public sealed class InvoiceService(
             current = current.AddMonths(1);
         }
 
-        var rows = occurrences
-            .GroupBy(o => o.RecurringInvoiceId ?? o.Id)
-            .Select(g =>
-            {
-                var first = g.First();
-                var seriesEntity = invoiceLookup.GetValueOrDefault(g.Key);
-                var monthDict = g
-                    .GroupBy(o => o.Date.ToString("yyyy-MM"))
-                    .ToDictionary(
-                        mg => mg.Key,
-                        mg => (IReadOnlyList<InvoiceResponse>)[.. mg.OrderBy(o => o.Date)]);
+        var rows = new List<InvoiceCalendarRow>();
+        foreach (var series in seriesList)
+        {
+            var occurrences = InvoiceSeriesExpander.Expand(series, startDate, endDate);
+            if (occurrences.Count == 0) continue;
 
-                var source = seriesEntity?.Paycheck;
+            var responses = occurrences
+                .Select(o => MapOccurrence(o, series, scope))
+                .OrderBy(r => r.Date)
+                .ToList();
 
-                return new InvoiceCalendarRow(
-                    InvoiceId: g.Key,
-                    Description: first.Description,
-                    Type: seriesEntity?.Type ?? first.Type,
-                    ParentInvoiceId: seriesEntity?.ParentInvoiceId ?? first.ParentInvoiceId,
-                    Class: seriesEntity?.Class ?? first.Class,
-                    PointOfSale: seriesEntity?.PointOfSale ?? first.PointOfSale,
-                    Source: source is null ? null : new InvoiceSourceInfo(source.Id, source.Description, source.Amount),
-                    IsRecurring: first.IsRecurring,
-                    Recurrence: first.Recurrence,
-                    Occurrences: monthDict);
-            })
-            .ToList();
+            var monthDict = responses
+                .GroupBy(r => r.Date.ToString("yyyy-MM"))
+                .ToDictionary(
+                    g => g.Key,
+                    g => (IReadOnlyList<InvoiceResponse>)[.. g.OrderBy(o => o.Date)]);
+
+            var activeSegment = InvoiceSeriesExpander.GetActiveSegment(series, today);
+            var isRecurring = series.Segments.Any(s => s.RecurrenceRule is not null);
+            var recurrence = activeSegment?.RecurrenceRule is null
+                ? null
+                : new RecurrenceInfo(
+                    activeSegment.EffectiveFrom,
+                    activeSegment.RecurrenceRule.Frequency,
+                    activeSegment.RecurrenceRule.Interval,
+                    activeSegment.RecurrenceRule.EndDate,
+                    activeSegment.RecurrenceRule.TotalInstallments);
+
+            var source = activeSegment?.PaycheckSeries is not null
+                ? new InvoiceSourceInfo(activeSegment.PaycheckSeries.Id, activeSegment.PaycheckSeries.Description, 0m)
+                : null;
+
+            rows.Add(new InvoiceCalendarRow(
+                InvoiceId: series.Id,
+                Description: series.Description,
+                Type: series.Type,
+                ParentExceptionId: series.ParentExceptionId,
+                Class: series.Class,
+                PointOfSale: series.PointOfSale,
+                Source: source,
+                IsRecurring: isRecurring,
+                Recurrence: recurrence,
+                Occurrences: monthDict));
+        }
 
         var totals = months
             .Select(m => SumByCurrency(rows
@@ -383,89 +370,89 @@ public sealed class InvoiceService(
         return new CalendarResponse<InvoiceCalendarRow>(months, rows, totals);
     }
 
-    private async Task<List<InvoiceResponse>> ExpandOccurrences(IReadOnlyList<Invoice> invoices, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken)
-    {
-        var oneOffs = new List<Invoice>();
-        var series = new List<Invoice>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Invoice>();
-
-        foreach (var i in invoices)
-        {
-            if (i.RecurrenceRule is not null)
-                series.Add(i);
-            else if (i.RecurringInvoiceId.HasValue && i.OriginalDate.HasValue)
-                exceptionLookup[(i.RecurringInvoiceId.Value, i.OriginalDate.Value)] = i;
-            else
-                oneOffs.Add(i);
-        }
-
-        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
-        var results = new List<InvoiceResponse>();
-
-        foreach (var oneOff in oneOffs)
-        {
-            results.Add(MapOneOff(oneOff, scope));
-        }
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-
-            foreach (var (date, index) in occurrences)
-            {
-                var key = (s.Id, date);
-                if (exceptionLookup.TryGetValue(key, out var exception))
-                {
-                    if (exception.IsDeleted)
-                        continue;
-
-                    results.Add(MapOverride(exception, s, index, scope));
-                }
-                else
-                {
-                    results.Add(MapVirtual(s, date, index, scope));
-                }
-            }
-        }
-
-        results.Sort((a, b) => a.Date.CompareTo(b.Date));
-        return results;
-    }
-
-    private async Task<Error?> ValidateParent(InvoiceType type, Guid? parentInvoiceId, CancellationToken cancellationToken, Guid? currentId = null)
+    private async Task<ErrorOr<InvoiceException?>> ResolveAndMaterializeParent(
+        InvoiceType type,
+        Guid? parentSeriesId,
+        DateOnly? parentOriginalDate,
+        CancellationToken cancellationToken)
     {
         if (type == InvoiceType.Invoice)
         {
-            if (parentInvoiceId.HasValue)
+            if (parentSeriesId.HasValue)
                 return InvoiceErrors.ParentNotAllowed;
-            return null;
+            return (InvoiceException?)null;
         }
 
-        if (!parentInvoiceId.HasValue)
+        if (!parentSeriesId.HasValue || !parentOriginalDate.HasValue)
             return InvoiceErrors.ParentRequired;
 
-        if (currentId.HasValue && parentInvoiceId.Value == currentId.Value)
-            return InvoiceErrors.ParentMustBeInvoice;
-
-        var parent = await invoiceRepository.GetById(parentInvoiceId.Value, cancellationToken);
+        var parent = await invoiceRepository.GetById(parentSeriesId.Value, cancellationToken);
         if (parent is null || parent.UserId != currentUserProvider.UserId)
             return InvoiceErrors.ParentNotFound;
 
         if (parent.Type != InvoiceType.Invoice)
             return InvoiceErrors.ParentMustBeInvoice;
 
-        return null;
+        if (!InvoiceSeriesExpander.IsValidOccurrence(parent, parentOriginalDate.Value))
+            return InvoiceErrors.ParentOccurrenceNotValid;
+
+        var existing = await invoiceRepository.GetException(parent.Id, parentOriginalDate.Value, cancellationToken);
+        if (existing is not null)
+        {
+            if (existing.IsDeleted)
+                return InvoiceErrors.ParentOccurrenceNotValid;
+            return existing;
+        }
+
+        var globalIndex = InvoiceSeriesExpander.GetGlobalOccurrenceIndex(parent, parentOriginalDate.Value);
+        long? frozenNumber = parent.BaseNumber + globalIndex;
+
+        var materialized = new InvoiceException
+        {
+            SeriesId = parent.Id,
+            OriginalDate = parentOriginalDate.Value,
+            Date = null,
+            Amount = null,
+            Currency = null,
+            Number = frozenNumber,
+            IsDeleted = false
+        };
+        await invoiceRepository.AddException(materialized, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return materialized;
     }
 
-    private static Guid BuildOccurrenceId(Guid seriesId, DateOnly date)
+    private void CapOrDeleteSegment(InvoiceSegment segment, DateOnly boundary)
     {
-        Span<byte> buffer = stackalloc byte[20];
-        seriesId.TryWriteBytes(buffer);
-        BitConverter.TryWriteBytes(buffer[16..], date.DayNumber);
-        Span<byte> hash = stackalloc byte[16];
-        System.Security.Cryptography.MD5.HashData(buffer, hash);
-        return new Guid(hash);
+        if (segment.RecurrenceRule is null)
+        {
+            invoiceRepository.DeleteSegment(segment);
+            return;
+        }
+
+        var previous = RecurrenceExpander.GetPreviousOccurrence(segment.EffectiveFrom, segment.RecurrenceRule, boundary);
+        if (previous is null)
+        {
+            invoiceRepository.DeleteSegment(segment);
+        }
+        else
+        {
+            segment.RecurrenceRule.EndDate = previous;
+            invoiceRepository.UpdateSegment(segment);
+        }
     }
+
+    private static RecurrenceRule? MapRecurrence(CreateRecurrenceRequest? request) =>
+        request is null
+            ? null
+            : new RecurrenceRule
+            {
+                Frequency = request.Frequency,
+                Interval = request.Interval,
+                EndDate = request.EndDate,
+                TotalInstallments = request.TotalInstallments
+            };
 
     private static IReadOnlyDictionary<string, decimal> SumByCurrency(IEnumerable<InvoiceResponse> occurrences)
     {
@@ -481,100 +468,98 @@ public sealed class InvoiceService(
         return totals;
     }
 
-    private static InvoiceDetailResponse MapEntityDetail(Invoice invoice, CurrencyScope scope) =>
-        new(
-            Id: invoice.Id,
-            UserId: invoice.UserId,
-            Date: invoice.Date,
-            Amount: invoice.Amount,
-            Currency: invoice.Currency,
-            Description: invoice.Description,
-            Source: invoice.Source,
-            Type: invoice.Type,
-            ParentInvoiceId: invoice.ParentInvoiceId,
-            Class: invoice.Class,
-            PointOfSale: invoice.PointOfSale,
-            Number: invoice.Number,
-            RecurrenceRule: invoice.RecurrenceRule,
-            RecurringInvoiceId: invoice.RecurringInvoiceId,
-            OriginalDate: invoice.OriginalDate,
-            IsDeleted: invoice.IsDeleted,
-            Paycheck: invoice.Paycheck,
-            Amounts: scope.ConvertToDisplay(invoice.Amount, invoice.Currency, invoice.Date));
+    private static InvoiceDetailResponse MapDetail(InvoiceSeries series)
+    {
+        InvoiceParentSummary? parent = null;
+        if (series.ParentException is not null)
+        {
+            parent = new InvoiceParentSummary(
+                SeriesId: series.ParentException.SeriesId,
+                OriginalDate: series.ParentException.OriginalDate,
+                Number: series.ParentException.Number,
+                Description: series.ParentException.Series?.Description ?? string.Empty);
+        }
 
-    private static InvoiceResponse MapOneOff(Invoice invoice, CurrencyScope scope) =>
-        new(
-            Id: invoice.Id,
-            Date: invoice.Date,
-            Amount: invoice.Amount,
-            Currency: invoice.Currency,
-            Amounts: scope.ConvertToDisplay(invoice.Amount, invoice.Currency, invoice.Date),
-            Description: invoice.Description,
-            Source: invoice.Source,
-            Type: invoice.Type,
-            ParentInvoiceId: invoice.ParentInvoiceId,
-            Class: invoice.Class,
-            PointOfSale: invoice.PointOfSale,
-            Number: invoice.Number,
-            IsRecurring: false,
-            RecurringInvoiceId: null,
-            OriginalDate: null,
-            IsOverride: false,
-            Recurrence: null,
-            InstallmentNumber: null,
-            TotalInstallments: null);
-
-    private static InvoiceResponse MapVirtual(Invoice series, DateOnly date, int occurrenceIndex, CurrencyScope scope) =>
-        new(
-            Id: BuildOccurrenceId(series.Id, date),
-            Date: date,
-            Amount: series.Amount,
-            Currency: series.Currency,
-            Amounts: scope.ConvertToDisplay(series.Amount, series.Currency, date),
+        return new InvoiceDetailResponse(
+            Id: series.Id,
+            UserId: series.UserId,
             Description: series.Description,
-            Source: series.Source,
             Type: series.Type,
-            ParentInvoiceId: series.ParentInvoiceId,
             Class: series.Class,
             PointOfSale: series.PointOfSale,
-            Number: series.Number + occurrenceIndex,
-            IsRecurring: true,
-            RecurringInvoiceId: series.Id,
-            OriginalDate: null,
-            IsOverride: false,
-            Recurrence: new RecurrenceInfo(
-                series.Date,
-                series.RecurrenceRule!.Frequency,
-                series.RecurrenceRule.Interval,
-                series.RecurrenceRule.EndDate,
-                series.RecurrenceRule.TotalInstallments),
-            InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
-            TotalInstallments: series.RecurrenceRule.TotalInstallments);
+            BaseNumber: series.BaseNumber,
+            ParentExceptionId: series.ParentExceptionId,
+            ParentInvoice: parent,
+            Segments: series.Segments
+                .OrderBy(s => s.EffectiveFrom)
+                .Select(s => new InvoiceSegmentResponse(
+                    Id: s.Id,
+                    EffectiveFrom: s.EffectiveFrom,
+                    Amount: s.Amount,
+                    Currency: s.Currency,
+                    RecurrenceRule: s.RecurrenceRule,
+                    Source: s.Source,
+                    PaycheckSeries: s.PaycheckSeries is null
+                        ? null
+                        : new PaycheckSummary(s.PaycheckSeries.Id, s.PaycheckSeries.Description)))
+                .ToList(),
+            Exceptions: series.Exceptions
+                .OrderBy(e => e.OriginalDate)
+                .Select(e => new InvoiceExceptionResponse(
+                    Id: e.Id,
+                    OriginalDate: e.OriginalDate,
+                    Date: e.Date,
+                    Amount: e.Amount,
+                    Currency: e.Currency,
+                    Number: e.Number,
+                    IsDeleted: e.IsDeleted))
+                .ToList());
+    }
 
-    private static InvoiceResponse MapOverride(Invoice exception, Invoice series, int occurrenceIndex, CurrencyScope scope) =>
-        new(
-            Id: exception.Id,
-            Date: exception.Date,
-            Amount: exception.Amount,
-            Currency: exception.Currency,
-            Amounts: scope.ConvertToDisplay(exception.Amount, exception.Currency, exception.Date),
-            Description: exception.Description,
-            Source: exception.Source,
+    private static InvoiceResponse MapOccurrence(InvoiceOccurrence occurrence, InvoiceSeries series, CurrencyScope scope)
+    {
+        var segment = occurrence.Segment;
+        var amount = occurrence.Exception?.Amount ?? segment.Amount;
+        var currency = occurrence.Exception?.Currency ?? segment.Currency;
+        var date = occurrence.Date;
+        var hasInstallments = segment.RecurrenceRule?.TotalInstallments is not null;
+
+        return new InvoiceResponse(
+            Id: occurrence.Exception?.Id ?? BuildOccurrenceId(series.Id, occurrence.OriginalDate),
+            Date: date,
+            Amount: amount,
+            Currency: currency,
+            Amounts: scope.ConvertToDisplay(amount, currency, date),
+            Description: series.Description,
+            Source: segment.Source,
             Type: series.Type,
-            ParentInvoiceId: series.ParentInvoiceId,
+            ParentExceptionId: series.ParentExceptionId,
             Class: series.Class,
             PointOfSale: series.PointOfSale,
-            Number: exception.Number ?? series.Number + occurrenceIndex,
-            IsRecurring: true,
-            RecurringInvoiceId: exception.RecurringInvoiceId,
-            OriginalDate: exception.OriginalDate,
-            IsOverride: true,
-            Recurrence: new RecurrenceInfo(
-                series.Date,
-                series.RecurrenceRule!.Frequency,
-                series.RecurrenceRule.Interval,
-                series.RecurrenceRule.EndDate,
-                series.RecurrenceRule.TotalInstallments),
-            InstallmentNumber: series.RecurrenceRule.TotalInstallments.HasValue ? occurrenceIndex + 1 : null,
-            TotalInstallments: series.RecurrenceRule.TotalInstallments);
+            Number: occurrence.Number,
+            IsRecurring: segment.RecurrenceRule is not null,
+            RecurringInvoiceId: segment.RecurrenceRule is not null ? series.Id : null,
+            OriginalDate: occurrence.Exception is null ? null : occurrence.OriginalDate,
+            IsOverride: occurrence.Exception is not null,
+            Recurrence: segment.RecurrenceRule is null
+                ? null
+                : new RecurrenceInfo(
+                    segment.EffectiveFrom,
+                    segment.RecurrenceRule.Frequency,
+                    segment.RecurrenceRule.Interval,
+                    segment.RecurrenceRule.EndDate,
+                    segment.RecurrenceRule.TotalInstallments),
+            InstallmentNumber: hasInstallments ? occurrence.OccurrenceIndex + 1 : null,
+            TotalInstallments: segment.RecurrenceRule?.TotalInstallments);
+    }
+
+    private static Guid BuildOccurrenceId(Guid seriesId, DateOnly date)
+    {
+        Span<byte> buffer = stackalloc byte[20];
+        seriesId.TryWriteBytes(buffer);
+        BitConverter.TryWriteBytes(buffer[16..], date.DayNumber);
+        Span<byte> hash = stackalloc byte[16];
+        System.Security.Cryptography.MD5.HashData(buffer, hash);
+        return new Guid(hash);
+    }
 }

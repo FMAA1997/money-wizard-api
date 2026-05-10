@@ -7,7 +7,7 @@ public sealed record InvoiceCalendarRow(
     Guid InvoiceId,
     string Description,
     InvoiceType Type,
-    Guid? ParentInvoiceId,
+    Guid? ParentExceptionId,
     InvoiceClass? Class,
     int? PointOfSale,
     InvoiceSourceInfo? Source,

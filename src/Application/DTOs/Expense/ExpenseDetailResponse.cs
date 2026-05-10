@@ -1,3 +1,5 @@
+using Application.DTOs.Invoice;
+using Application.DTOs.Paycheck;
 using Domain.Models;
 
 namespace Application.DTOs.Expense;
@@ -5,18 +7,27 @@ namespace Application.DTOs.Expense;
 public sealed record ExpenseDetailResponse(
     Guid Id,
     Guid UserId,
-    DateOnly Date,
-    decimal Amount,
-    string Currency,
     string Description,
     Guid? CategoryId,
-    Guid? PaycheckId,
-    Guid? InvoiceId,
-    RecurrenceRule? RecurrenceRule,
-    Guid? RecurringExpenseId,
-    DateOnly? OriginalDate,
-    bool IsDeleted,
     ExpenseCategory? Category,
-    Domain.Models.Paycheck? Paycheck,
-    Domain.Models.Invoice? Invoice,
-    IReadOnlyDictionary<string, decimal> Amounts);
+    IReadOnlyList<ExpenseSegmentResponse> Segments,
+    IReadOnlyList<ExpenseExceptionResponse> Exceptions);
+
+public sealed record ExpenseSegmentResponse(
+    Guid Id,
+    DateOnly EffectiveFrom,
+    decimal Amount,
+    string Currency,
+    RecurrenceRule? RecurrenceRule,
+    Guid? PaycheckSeriesId,
+    PaycheckSummary? PaycheckSeries,
+    Guid? InvoiceSeriesId,
+    InvoiceSummary? InvoiceSeries);
+
+public sealed record ExpenseExceptionResponse(
+    Guid Id,
+    DateOnly OriginalDate,
+    DateOnly? Date,
+    decimal? Amount,
+    string? Currency,
+    bool IsDeleted);

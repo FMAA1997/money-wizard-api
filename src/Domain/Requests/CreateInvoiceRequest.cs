@@ -6,8 +6,9 @@ public sealed record CreateInvoiceRequest(
     DateOnly Date, decimal Amount, string Currency, string Description,
     Guid? Source,
     InvoiceType Type,
-    Guid? ParentInvoiceId,
+    Guid? ParentInvoiceSeriesId,
+    DateOnly? ParentOriginalDate,
     InvoiceClass? Class,
     int? PointOfSale,
-    long? Number,
+    long? BaseNumber,
     CreateRecurrenceRequest? Recurrence);

@@ -49,69 +49,6 @@ namespace Infrastructure.Migrations
                     b.ToTable("ArgentinaUserProfiles");
                 });
 
-            modelBuilder.Entity("Domain.Models.Expense", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<decimal>("Amount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<Guid?>("CategoryId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Currency")
-                        .IsRequired()
-                        .HasMaxLength(3)
-                        .HasColumnType("character varying(3)");
-
-                    b.Property<DateOnly>("Date")
-                        .HasColumnType("date");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<Guid?>("InvoiceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("IsDeleted")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false);
-
-                    b.Property<DateOnly?>("OriginalDate")
-                        .HasColumnType("date");
-
-                    b.Property<Guid?>("PaycheckId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid?>("RecurringExpenseId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CategoryId");
-
-                    b.HasIndex("InvoiceId");
-
-                    b.HasIndex("PaycheckId");
-
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("RecurringExpenseId", "OriginalDate")
-                        .IsUnique()
-                        .HasFilter("\"RecurringExpenseId\" IS NOT NULL");
-
-                    b.ToTable("Expenses");
-                });
-
             modelBuilder.Entity("Domain.Models.ExpenseCategory", b =>
                 {
                     b.Property<Guid>("Id")
@@ -136,6 +73,107 @@ namespace Infrastructure.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("ExpenseCategories");
+                });
+
+            modelBuilder.Entity("Domain.Models.ExpenseException", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Currency")
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<DateOnly?>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsDeleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<DateOnly>("OriginalDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("SeriesId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SeriesId", "OriginalDate")
+                        .IsUnique();
+
+                    b.ToTable("ExpenseExceptions");
+                });
+
+            modelBuilder.Entity("Domain.Models.ExpenseSegment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("InvoiceSeriesId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("PaycheckSeriesId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("SeriesId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InvoiceSeriesId");
+
+                    b.HasIndex("PaycheckSeriesId");
+
+                    b.HasIndex("SeriesId", "EffectiveFrom")
+                        .IsUnique();
+
+                    b.ToTable("ExpenseSegments");
+                });
+
+            modelBuilder.Entity("Domain.Models.ExpenseSeries", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CategoryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CategoryId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("ExpenseSeries");
                 });
 
             modelBuilder.Entity("Domain.Models.Investment", b =>
@@ -179,82 +217,6 @@ namespace Infrastructure.Migrations
                     b.ToTable("Investments");
                 });
 
-            modelBuilder.Entity("Domain.Models.Invoice", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<decimal>("Amount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<string>("Class")
-                        .HasMaxLength(1)
-                        .HasColumnType("character varying(1)");
-
-                    b.Property<string>("Currency")
-                        .IsRequired()
-                        .HasMaxLength(3)
-                        .HasColumnType("character varying(3)");
-
-                    b.Property<DateOnly>("Date")
-                        .HasColumnType("date");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<bool>("IsDeleted")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false);
-
-                    b.Property<long?>("Number")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateOnly?>("OriginalDate")
-                        .HasColumnType("date");
-
-                    b.Property<Guid?>("ParentInvoiceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int?>("PointOfSale")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid?>("RecurringInvoiceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid?>("Source")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Type")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(15)
-                        .HasColumnType("character varying(15)")
-                        .HasDefaultValue("Invoice");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ParentInvoiceId")
-                        .HasFilter("\"ParentInvoiceId\" IS NOT NULL");
-
-                    b.HasIndex("Source");
-
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("RecurringInvoiceId", "OriginalDate")
-                        .IsUnique()
-                        .HasFilter("\"RecurringInvoiceId\" IS NOT NULL");
-
-                    b.ToTable("Invoices");
-                });
-
             modelBuilder.Entity("Domain.Models.InvoiceCategory", b =>
                 {
                     b.Property<Guid>("Id")
@@ -296,7 +258,46 @@ namespace Infrastructure.Migrations
                     b.ToTable("InvoiceCategories");
                 });
 
-            modelBuilder.Entity("Domain.Models.Paycheck", b =>
+            modelBuilder.Entity("Domain.Models.InvoiceException", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Currency")
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<DateOnly?>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsDeleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<long?>("Number")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateOnly>("OriginalDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("SeriesId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SeriesId", "OriginalDate")
+                        .IsUnique();
+
+                    b.ToTable("InvoiceExceptions");
+                });
+
+            modelBuilder.Entity("Domain.Models.InvoiceSegment", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -311,24 +312,144 @@ namespace Infrastructure.Migrations
                         .HasMaxLength(3)
                         .HasColumnType("character varying(3)");
 
-                    b.Property<DateOnly>("Date")
+                    b.Property<DateOnly>("EffectiveFrom")
                         .HasColumnType("date");
+
+                    b.Property<Guid>("SeriesId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("Source")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Source");
+
+                    b.HasIndex("SeriesId", "EffectiveFrom")
+                        .IsUnique();
+
+                    b.ToTable("InvoiceSegments");
+                });
+
+            modelBuilder.Entity("Domain.Models.InvoiceSeries", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<long?>("BaseNumber")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Class")
+                        .HasMaxLength(1)
+                        .HasColumnType("character varying(1)");
 
                     b.Property<string>("Description")
                         .IsRequired()
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<Guid?>("ParentExceptionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("PointOfSale")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(15)
+                        .HasColumnType("character varying(15)")
+                        .HasDefaultValue("Invoice");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ParentExceptionId")
+                        .HasFilter("\"ParentExceptionId\" IS NOT NULL");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("InvoiceSeries");
+                });
+
+            modelBuilder.Entity("Domain.Models.PaycheckException", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Currency")
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<DateOnly?>("Date")
+                        .HasColumnType("date");
+
                     b.Property<bool>("IsDeleted")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
                         .HasDefaultValue(false);
 
-                    b.Property<DateOnly?>("OriginalDate")
+                    b.Property<DateOnly>("OriginalDate")
                         .HasColumnType("date");
 
-                    b.Property<Guid?>("RecurringPaycheckId")
+                    b.Property<Guid>("SeriesId")
                         .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SeriesId", "OriginalDate")
+                        .IsUnique();
+
+                    b.ToTable("PaycheckExceptions");
+                });
+
+            modelBuilder.Entity("Domain.Models.PaycheckSegment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("SeriesId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SeriesId", "EffectiveFrom")
+                        .IsUnique();
+
+                    b.ToTable("PaycheckSegments");
+                });
+
+            modelBuilder.Entity("Domain.Models.PaycheckSeries", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
@@ -337,11 +458,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.HasIndex("RecurringPaycheckId", "OriginalDate")
-                        .IsUnique()
-                        .HasFilter("\"RecurringPaycheckId\" IS NOT NULL");
-
-                    b.ToTable("Paychecks");
+                    b.ToTable("PaycheckSeries");
                 });
 
             modelBuilder.Entity("Domain.Models.User", b =>
@@ -404,37 +521,49 @@ namespace Infrastructure.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("Domain.Models.Expense", b =>
+            modelBuilder.Entity("Domain.Models.ExpenseCategory", b =>
                 {
-                    b.HasOne("Domain.Models.ExpenseCategory", "Category")
-                        .WithMany("Expenses")
-                        .HasForeignKey("CategoryId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("Domain.Models.Invoice", "Invoice")
-                        .WithMany("Expenses")
-                        .HasForeignKey("InvoiceId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("Domain.Models.Paycheck", "Paycheck")
-                        .WithMany("Expenses")
-                        .HasForeignKey("PaycheckId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("Domain.Models.Expense", "RecurringExpense")
-                        .WithMany("Exceptions")
-                        .HasForeignKey("RecurringExpenseId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
                     b.HasOne("Domain.Models.User", "User")
-                        .WithMany("Expenses")
+                        .WithMany("ExpenseCategories")
                         .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Domain.Models.ExpenseException", b =>
+                {
+                    b.HasOne("Domain.Models.ExpenseSeries", "Series")
+                        .WithMany("Exceptions")
+                        .HasForeignKey("SeriesId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Series");
+                });
+
+            modelBuilder.Entity("Domain.Models.ExpenseSegment", b =>
+                {
+                    b.HasOne("Domain.Models.InvoiceSeries", "InvoiceSeries")
+                        .WithMany()
+                        .HasForeignKey("InvoiceSeriesId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Domain.Models.PaycheckSeries", "PaycheckSeries")
+                        .WithMany()
+                        .HasForeignKey("PaycheckSeriesId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Domain.Models.ExpenseSeries", "Series")
+                        .WithMany("Segments")
+                        .HasForeignKey("SeriesId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.OwnsOne("Domain.Models.RecurrenceRule", "RecurrenceRule", b1 =>
                         {
-                            b1.Property<Guid>("ExpenseId")
+                            b1.Property<Guid>("ExpenseSegmentId")
                                 .HasColumnType("uuid");
 
                             b1.Property<DateOnly?>("EndDate")
@@ -453,34 +582,37 @@ namespace Infrastructure.Migrations
                                 .HasColumnType("integer")
                                 .HasColumnName("RecurrenceTotalInstallments");
 
-                            b1.HasKey("ExpenseId");
+                            b1.HasKey("ExpenseSegmentId");
 
-                            b1.ToTable("Expenses");
+                            b1.ToTable("ExpenseSegments");
 
                             b1.WithOwner()
-                                .HasForeignKey("ExpenseId");
+                                .HasForeignKey("ExpenseSegmentId");
                         });
 
-                    b.Navigation("Category");
+                    b.Navigation("InvoiceSeries");
 
-                    b.Navigation("Invoice");
-
-                    b.Navigation("Paycheck");
+                    b.Navigation("PaycheckSeries");
 
                     b.Navigation("RecurrenceRule");
 
-                    b.Navigation("RecurringExpense");
-
-                    b.Navigation("User");
+                    b.Navigation("Series");
                 });
 
-            modelBuilder.Entity("Domain.Models.ExpenseCategory", b =>
+            modelBuilder.Entity("Domain.Models.ExpenseSeries", b =>
                 {
+                    b.HasOne("Domain.Models.ExpenseCategory", "Category")
+                        .WithMany("ExpenseSeries")
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("Domain.Models.User", "User")
-                        .WithMany("ExpenseCategories")
+                        .WithMany("ExpenseSeries")
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("Category");
 
                     b.Navigation("User");
                 });
@@ -496,32 +628,33 @@ namespace Infrastructure.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("Domain.Models.Invoice", b =>
+            modelBuilder.Entity("Domain.Models.InvoiceException", b =>
                 {
-                    b.HasOne("Domain.Models.Invoice", "ParentInvoice")
-                        .WithMany("ChildNotes")
-                        .HasForeignKey("ParentInvoiceId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
-                    b.HasOne("Domain.Models.Invoice", "RecurringInvoice")
+                    b.HasOne("Domain.Models.InvoiceSeries", "Series")
                         .WithMany("Exceptions")
-                        .HasForeignKey("RecurringInvoiceId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .HasForeignKey("SeriesId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
-                    b.HasOne("Domain.Models.Paycheck", "Paycheck")
-                        .WithMany("Invoices")
+                    b.Navigation("Series");
+                });
+
+            modelBuilder.Entity("Domain.Models.InvoiceSegment", b =>
+                {
+                    b.HasOne("Domain.Models.InvoiceSeries", "Series")
+                        .WithMany("Segments")
+                        .HasForeignKey("SeriesId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Domain.Models.PaycheckSeries", "PaycheckSeries")
+                        .WithMany()
                         .HasForeignKey("Source")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("Domain.Models.User", "User")
-                        .WithMany("Invoices")
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
                     b.OwnsOne("Domain.Models.RecurrenceRule", "RecurrenceRule", b1 =>
                         {
-                            b1.Property<Guid>("InvoiceId")
+                            b1.Property<Guid>("InvoiceSegmentId")
                                 .HasColumnType("uuid");
 
                             b1.Property<DateOnly?>("EndDate")
@@ -540,41 +673,61 @@ namespace Infrastructure.Migrations
                                 .HasColumnType("integer")
                                 .HasColumnName("RecurrenceTotalInstallments");
 
-                            b1.HasKey("InvoiceId");
+                            b1.HasKey("InvoiceSegmentId");
 
-                            b1.ToTable("Invoices");
+                            b1.ToTable("InvoiceSegments");
 
                             b1.WithOwner()
-                                .HasForeignKey("InvoiceId");
+                                .HasForeignKey("InvoiceSegmentId");
                         });
 
-                    b.Navigation("ParentInvoice");
-
-                    b.Navigation("Paycheck");
+                    b.Navigation("PaycheckSeries");
 
                     b.Navigation("RecurrenceRule");
 
-                    b.Navigation("RecurringInvoice");
-
-                    b.Navigation("User");
+                    b.Navigation("Series");
                 });
 
-            modelBuilder.Entity("Domain.Models.Paycheck", b =>
+            modelBuilder.Entity("Domain.Models.InvoiceSeries", b =>
                 {
-                    b.HasOne("Domain.Models.Paycheck", "RecurringPaycheck")
-                        .WithMany("Exceptions")
-                        .HasForeignKey("RecurringPaycheckId")
+                    b.HasOne("Domain.Models.InvoiceException", "ParentException")
+                        .WithMany("ChildSeries")
+                        .HasForeignKey("ParentExceptionId")
                         .OnDelete(DeleteBehavior.Cascade);
 
                     b.HasOne("Domain.Models.User", "User")
-                        .WithMany("Paychecks")
+                        .WithMany("InvoiceSeries")
                         .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ParentException");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Domain.Models.PaycheckException", b =>
+                {
+                    b.HasOne("Domain.Models.PaycheckSeries", "Series")
+                        .WithMany("Exceptions")
+                        .HasForeignKey("SeriesId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Series");
+                });
+
+            modelBuilder.Entity("Domain.Models.PaycheckSegment", b =>
+                {
+                    b.HasOne("Domain.Models.PaycheckSeries", "Series")
+                        .WithMany("Segments")
+                        .HasForeignKey("SeriesId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.OwnsOne("Domain.Models.RecurrenceRule", "RecurrenceRule", b1 =>
                         {
-                            b1.Property<Guid>("PaycheckId")
+                            b1.Property<Guid>("PaycheckSegmentId")
                                 .HasColumnType("uuid");
 
                             b1.Property<DateOnly?>("EndDate")
@@ -593,47 +746,59 @@ namespace Infrastructure.Migrations
                                 .HasColumnType("integer")
                                 .HasColumnName("RecurrenceTotalInstallments");
 
-                            b1.HasKey("PaycheckId");
+                            b1.HasKey("PaycheckSegmentId");
 
-                            b1.ToTable("Paychecks");
+                            b1.ToTable("PaycheckSegments");
 
                             b1.WithOwner()
-                                .HasForeignKey("PaycheckId");
+                                .HasForeignKey("PaycheckSegmentId");
                         });
 
                     b.Navigation("RecurrenceRule");
 
-                    b.Navigation("RecurringPaycheck");
-
-                    b.Navigation("User");
+                    b.Navigation("Series");
                 });
 
-            modelBuilder.Entity("Domain.Models.Expense", b =>
+            modelBuilder.Entity("Domain.Models.PaycheckSeries", b =>
                 {
-                    b.Navigation("Exceptions");
+                    b.HasOne("Domain.Models.User", "User")
+                        .WithMany("PaycheckSeries")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("Domain.Models.ExpenseCategory", b =>
                 {
-                    b.Navigation("Expenses");
+                    b.Navigation("ExpenseSeries");
                 });
 
-            modelBuilder.Entity("Domain.Models.Invoice", b =>
-                {
-                    b.Navigation("ChildNotes");
-
-                    b.Navigation("Exceptions");
-
-                    b.Navigation("Expenses");
-                });
-
-            modelBuilder.Entity("Domain.Models.Paycheck", b =>
+            modelBuilder.Entity("Domain.Models.ExpenseSeries", b =>
                 {
                     b.Navigation("Exceptions");
 
-                    b.Navigation("Expenses");
+                    b.Navigation("Segments");
+                });
 
-                    b.Navigation("Invoices");
+            modelBuilder.Entity("Domain.Models.InvoiceException", b =>
+                {
+                    b.Navigation("ChildSeries");
+                });
+
+            modelBuilder.Entity("Domain.Models.InvoiceSeries", b =>
+                {
+                    b.Navigation("Exceptions");
+
+                    b.Navigation("Segments");
+                });
+
+            modelBuilder.Entity("Domain.Models.PaycheckSeries", b =>
+                {
+                    b.Navigation("Exceptions");
+
+                    b.Navigation("Segments");
                 });
 
             modelBuilder.Entity("Domain.Models.User", b =>
@@ -642,13 +807,13 @@ namespace Infrastructure.Migrations
 
                     b.Navigation("ExpenseCategories");
 
-                    b.Navigation("Expenses");
+                    b.Navigation("ExpenseSeries");
 
                     b.Navigation("Investments");
 
-                    b.Navigation("Invoices");
+                    b.Navigation("InvoiceSeries");
 
-                    b.Navigation("Paychecks");
+                    b.Navigation("PaycheckSeries");
                 });
 #pragma warning restore 612, 618
         }

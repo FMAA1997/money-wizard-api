@@ -78,45 +78,19 @@ public sealed class InvoiceStatisticsService(
         return new DateOnly(year, month, Math.Min(day, maxDay));
     }
 
-    private static decimal SumExpandedAmountsInArs(IReadOnlyList<Invoice> invoices, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+    private static decimal SumExpandedAmountsInArs(IReadOnlyList<InvoiceSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
-        var oneOffs = new List<Invoice>();
-        var series = new List<Invoice>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Invoice>();
-
-        foreach (var invoice in invoices)
+        decimal total = 0;
+        foreach (var series in seriesList)
         {
-            if (invoice.RecurrenceRule is not null)
-                series.Add(invoice);
-            else if (invoice.RecurringInvoiceId.HasValue && invoice.OriginalDate.HasValue)
-                exceptionLookup[(invoice.RecurringInvoiceId.Value, invoice.OriginalDate.Value)] = invoice;
-            else
-                oneOffs.Add(invoice);
-        }
-
-        var total = oneOffs
-            .Where(i => i.Date >= startDate && i.Date <= endDate)
-            .Sum(i => Sign(i.Type) * scope.Convert(i.Amount, i.Currency, "ARS", i.Date));
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-            var sign = Sign(s.Type);
-
-            foreach (var (date, _) in occurrences)
+            var sign = Sign(series.Type);
+            foreach (var occurrence in InvoiceSeriesExpander.Expand(series, startDate, endDate))
             {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (!exception.IsDeleted)
-                        total += sign * scope.Convert(exception.Amount, exception.Currency, "ARS", exception.Date);
-                }
-                else
-                {
-                    total += sign * scope.Convert(s.Amount, s.Currency, "ARS", date);
-                }
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                total += sign * scope.Convert(amount, currency, "ARS", occurrence.Date);
             }
         }
-
         return total;
     }
 

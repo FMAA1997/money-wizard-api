@@ -17,19 +17,16 @@ public sealed class ExpenseStatisticsService(
 {
     public async Task<ErrorOr<ExpenseTotals>> GetTotals(int year, CancellationToken cancellationToken = default)
     {
-        var result = await GetYearExpenses(year, cancellationToken);
-        if (result.IsError)
-            return result.Errors;
-
-        var (expenses, previousYearStart, currentYearStart, currentYearEnd) = result.Value;
+        var (seriesList, previousYearStart, currentYearStart, currentYearEnd) =
+            await GetYearSeries(year, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var ytdEnd = today < currentYearEnd ? today : currentYearEnd;
 
-        var totalCurrentYear = SumExpandedAmounts(expenses, currentYearStart, currentYearEnd, scope);
-        var totalYtd = SumExpandedAmounts(expenses, currentYearStart, ytdEnd, scope);
-        var totalPreviousYear = SumExpandedAmounts(expenses, previousYearStart, currentYearStart.AddDays(-1), scope);
+        var totalCurrentYear = SumExpandedAmounts(seriesList, currentYearStart, currentYearEnd, scope);
+        var totalYtd = SumExpandedAmounts(seriesList, currentYearStart, ytdEnd, scope);
+        var totalPreviousYear = SumExpandedAmounts(seriesList, previousYearStart, currentYearStart.AddDays(-1), scope);
 
         var variationYoY = totalCurrentYear - totalPreviousYear;
         var variationYoyPctg = totalPreviousYear != 0
@@ -48,21 +45,18 @@ public sealed class ExpenseStatisticsService(
 
     public async Task<ErrorOr<MonthlyExpenseStats>> GetMonthlyExpenseStats(int year, CancellationToken cancellationToken = default)
     {
-        var result = await GetYearExpenses(year, cancellationToken);
-        if (result.IsError)
-            return result.Errors;
-
-        var (expenses, previousYearStart, currentYearStart, currentYearEnd) = result.Value;
+        var (seriesList, previousYearStart, currentYearStart, currentYearEnd) =
+            await GetYearSeries(year, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var currentYearMonthly = GetMonthlyAmounts(expenses, currentYearStart, currentYearEnd, scope);
-        var previousYearMonthly = GetMonthlyAmounts(expenses, previousYearStart, currentYearStart.AddDays(-1), scope);
+        var currentYearMonthly = GetMonthlyAmounts(seriesList, currentYearStart, currentYearEnd, scope);
+        var previousYearMonthly = GetMonthlyAmounts(seriesList, previousYearStart, currentYearStart.AddDays(-1), scope);
 
         var avgMonthlyExpense = currentYearMonthly.Values.Sum() / 12;
         var previousYearAvgMonthlyExpense = previousYearMonthly.Values.Sum() / 12;
 
-        var maxMonth = currentYearMonthly.MaxBy(kv => kv.Value);
-        var minMonth = currentYearMonthly.MinBy(kv => kv.Value);
+        var maxMonth = currentYearMonthly.Count > 0 ? currentYearMonthly.MaxBy(kv => kv.Value) : default;
+        var minMonth = currentYearMonthly.Count > 0 ? currentYearMonthly.MinBy(kv => kv.Value) : default;
 
         return new MonthlyExpenseStats
         {
@@ -80,50 +74,26 @@ public sealed class ExpenseStatisticsService(
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var rangeEnd = today.AddYears(1);
 
-        var expenses = await expenseRepository.GetByUserIdInRange(currentUserProvider.UserId, today, rangeEnd, cancellationToken);
-
-        var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
+        var seriesList = await expenseRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, today, rangeEnd, cancellationToken);
 
         DateOnly? earliestDate = null;
         decimal earliestAmount = 0;
         string? earliestCurrency = null;
         string? earliestDescription = null;
 
-        foreach (var e in oneOffs.Where(e => e.Date >= today))
+        foreach (var series in seriesList)
         {
-            if (earliestDate is null || e.Date < earliestDate)
-            {
-                earliestDate = e.Date;
-                earliestAmount = e.Amount;
-                earliestCurrency = e.Currency;
-                earliestDescription = e.Description;
-            }
-        }
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, today, rangeEnd);
+            var occurrences = ExpenseSeriesExpander.Expand(series, today, rangeEnd);
             if (occurrences.Count == 0) continue;
 
-            var (date, _) = occurrences[0];
-
-            if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
+            var first = occurrences[0];
+            if (earliestDate is null || first.Date < earliestDate)
             {
-                if (exception.IsDeleted) continue;
-                if (earliestDate is null || date < earliestDate)
-                {
-                    earliestDate = date;
-                    earliestAmount = exception.Amount;
-                    earliestCurrency = exception.Currency;
-                    earliestDescription = exception.Description;
-                }
-            }
-            else if (earliestDate is null || date < earliestDate)
-            {
-                earliestDate = date;
-                earliestAmount = s.Amount;
-                earliestCurrency = s.Currency;
-                earliestDescription = s.Description;
+                earliestDate = first.Date;
+                earliestAmount = first.Exception?.Amount ?? first.Segment.Amount;
+                earliestCurrency = first.Exception?.Currency ?? first.Segment.Currency;
+                earliestDescription = series.Description;
             }
         }
 
@@ -148,14 +118,14 @@ public sealed class ExpenseStatisticsService(
         var currentYearStart = new DateOnly(year, 1, 1);
         var currentYearEnd = new DateOnly(year, 12, 31);
 
-        var expenses = await expenseRepository.GetByUserIdInRange(
+        var seriesList = await expenseRepository.GetByUserIdInRange(
             currentUserProvider.UserId, currentYearStart, currentYearEnd, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         var monthlyByCategory = new Dictionary<(int Month, string Category), decimal>();
         var categoryColors = new Dictionary<string, string>();
 
-        foreach (var (date, amount, categoryName, categoryColor) in ExpandWithCategory(expenses, currentYearStart, currentYearEnd, scope))
+        foreach (var (date, amount, categoryName, categoryColor) in ExpandWithCategory(seriesList, currentYearStart, currentYearEnd, scope))
         {
             var key = (date.Month, categoryName);
             monthlyByCategory[key] = monthlyByCategory.GetValueOrDefault(key) + amount;
@@ -195,14 +165,14 @@ public sealed class ExpenseStatisticsService(
         var startDate = new DateOnly(year, month, 1);
         var endDate = startDate.AddMonths(1).AddDays(-1);
 
-        var expenses = await expenseRepository.GetByUserIdInRange(
+        var seriesList = await expenseRepository.GetByUserIdInRange(
             currentUserProvider.UserId, startDate, endDate, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         var categoryTotals = new Dictionary<string, decimal>();
         var categoryColors = new Dictionary<string, string>();
 
-        foreach (var (_, amount, categoryName, categoryColor) in ExpandWithCategory(expenses, startDate, endDate, scope))
+        foreach (var (_, amount, categoryName, categoryColor) in ExpandWithCategory(seriesList, startDate, endDate, scope))
         {
             categoryTotals[categoryName] = categoryTotals.GetValueOrDefault(categoryName) + amount;
             categoryColors[categoryName] = categoryColor;
@@ -239,7 +209,7 @@ public sealed class ExpenseStatisticsService(
             endDate = new DateOnly(year, 12, 31);
         }
 
-        var expenses = await expenseRepository.GetByUserIdInRange(
+        var seriesList = await expenseRepository.GetByUserIdInRange(
             currentUserProvider.UserId, startDate, endDate, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
@@ -249,7 +219,7 @@ public sealed class ExpenseStatisticsService(
         var categories = new HashSet<string>();
         var expenseKeys = new HashSet<(string Category, string Description)>();
 
-        foreach (var (_, amount, sourceName, categoryName, categoryColor, description) in ExpandWithSourceCategoryAndDescription(expenses, startDate, endDate, scope))
+        foreach (var (_, amount, sourceName, categoryName, categoryColor, description) in ExpandWithSourceCategoryAndDescription(seriesList, startDate, endDate, scope))
         {
             var key = (sourceName, categoryName, description);
             tripleTotals[key] = tripleTotals.GetValueOrDefault(key) + amount;
@@ -331,12 +301,12 @@ public sealed class ExpenseStatisticsService(
         var previousMonthStart = currentMonthStart.AddMonths(-1);
         var previousMonthEnd = currentMonthStart.AddDays(-1);
 
-        var expenses = await expenseRepository.GetByUserIdInRange(
+        var seriesList = await expenseRepository.GetByUserIdInRange(
             currentUserProvider.UserId, previousMonthStart, currentMonthEnd, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var currentMonth = SumExpandedAmounts(expenses, currentMonthStart, currentMonthEnd, scope);
-        var previousMonth = SumExpandedAmounts(expenses, previousMonthStart, previousMonthEnd, scope);
+        var currentMonth = SumExpandedAmounts(seriesList, currentMonthStart, currentMonthEnd, scope);
+        var previousMonth = SumExpandedAmounts(seriesList, previousMonthStart, previousMonthEnd, scope);
 
         var variation = currentMonth - previousMonth;
         var variationPctg = previousMonth != 0
@@ -354,185 +324,100 @@ public sealed class ExpenseStatisticsService(
         };
     }
 
-    private async Task<ErrorOr<(IReadOnlyList<Expense> Expenses, DateOnly PreviousYearStart, DateOnly CurrentYearStart, DateOnly CurrentYearEnd)>>
-        GetYearExpenses(int year, CancellationToken cancellationToken)
+    private async Task<(IReadOnlyList<ExpenseSeries> SeriesList, DateOnly PreviousYearStart, DateOnly CurrentYearStart, DateOnly CurrentYearEnd)>
+        GetYearSeries(int year, CancellationToken cancellationToken)
     {
         var previousYearStart = new DateOnly(year - 1, 1, 1);
         var currentYearStart = new DateOnly(year, 1, 1);
         var currentYearEnd = new DateOnly(year, 12, 31);
 
-        var expenses = await expenseRepository.GetByUserIdInRange(currentUserProvider.UserId, previousYearStart, currentYearEnd, cancellationToken);
+        var seriesList = await expenseRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, previousYearStart, currentYearEnd, cancellationToken);
 
-        return (expenses, previousYearStart, currentYearStart, currentYearEnd);
+        return (seriesList, previousYearStart, currentYearStart, currentYearEnd);
     }
 
-    private static Dictionary<int, decimal> GetMonthlyAmounts(IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+    private static Dictionary<int, decimal> GetMonthlyAmounts(
+        IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         var monthly = new Dictionary<int, decimal>();
-
-        var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
-
-        foreach (var e in oneOffs.Where(e => e.Date >= startDate && e.Date <= endDate))
+        foreach (var series in seriesList)
         {
-            var month = e.Date.Month;
-            monthly[month] = monthly.GetValueOrDefault(month) + scope.ConvertToPrimary(e.Amount, e.Currency, e.Date);
-        }
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-
-            foreach (var (date, _) in occurrences)
+            foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                decimal amountInPrimary;
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (exception.IsDeleted)
-                        continue;
-                    amountInPrimary = scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date);
-                }
-                else
-                {
-                    amountInPrimary = scope.ConvertToPrimary(s.Amount, s.Currency, date);
-                }
-
-                var month = date.Month;
-                monthly[month] = monthly.GetValueOrDefault(month) + amountInPrimary;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var month = occurrence.Date.Month;
+                monthly[month] = monthly.GetValueOrDefault(month) + scope.ConvertToPrimary(amount, currency, occurrence.Date);
             }
         }
-
         return monthly;
     }
 
-    private static (List<Expense> OneOffs, List<Expense> Series, Dictionary<(Guid, DateOnly), Expense> ExceptionLookup)
-        ClassifyExpenses(IReadOnlyList<Expense> expenses)
+    private static decimal SumExpandedAmounts(
+        IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
-        var oneOffs = new List<Expense>();
-        var series = new List<Expense>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Expense>();
-
-        foreach (var e in expenses)
+        decimal total = 0;
+        foreach (var series in seriesList)
         {
-            if (e.RecurrenceRule is not null)
-                series.Add(e);
-            else if (e.RecurringExpenseId.HasValue && e.OriginalDate.HasValue)
-                exceptionLookup[(e.RecurringExpenseId.Value, e.OriginalDate.Value)] = e;
-            else
-                oneOffs.Add(e);
+            foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
+            {
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                total += scope.ConvertToPrimary(amount, currency, occurrence.Date);
+            }
         }
-
-        return (oneOffs, series, exceptionLookup);
+        return total;
     }
 
     private static IEnumerable<(DateOnly Date, decimal Amount, string CategoryName, string CategoryColor)>
-        ExpandWithCategory(IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+        ExpandWithCategory(IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         const string uncategorizedName = "Uncategorized";
         const string uncategorizedColor = "#6b7280";
 
-        var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
-
-        foreach (var e in oneOffs.Where(e => e.Date >= startDate && e.Date <= endDate))
+        foreach (var series in seriesList)
         {
-            yield return (e.Date, scope.ConvertToPrimary(e.Amount, e.Currency, e.Date),
-                e.Category?.Name ?? uncategorizedName,
-                e.Category?.Color ?? uncategorizedColor);
-        }
+            var categoryName = series.Category?.Name ?? uncategorizedName;
+            var categoryColor = series.Category?.Color ?? uncategorizedColor;
 
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-
-            foreach (var (date, _) in occurrences)
+            foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (exception.IsDeleted) continue;
-                    yield return (date, scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date),
-                        exception.Category?.Name ?? uncategorizedName,
-                        exception.Category?.Color ?? uncategorizedColor);
-                }
-                else
-                {
-                    yield return (date, scope.ConvertToPrimary(s.Amount, s.Currency, date),
-                        s.Category?.Name ?? uncategorizedName,
-                        s.Category?.Color ?? uncategorizedColor);
-                }
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                yield return (occurrence.Date, scope.ConvertToPrimary(amount, currency, occurrence.Date), categoryName, categoryColor);
             }
         }
     }
 
     private static IEnumerable<(DateOnly Date, decimal Amount, string SourceName, string CategoryName, string CategoryColor, string Description)>
-        ExpandWithSourceCategoryAndDescription(IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+        ExpandWithSourceCategoryAndDescription(IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         const string uncategorizedName = "Uncategorized";
         const string uncategorizedColor = "#6b7280";
         const string otherSource = "Other";
 
-        var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
-
-        foreach (var e in oneOffs.Where(e => e.Date >= startDate && e.Date <= endDate))
+        foreach (var series in seriesList)
         {
-            yield return (e.Date, scope.ConvertToPrimary(e.Amount, e.Currency, e.Date),
-                e.Paycheck?.Description ?? e.Invoice?.Description ?? otherSource,
-                e.Category?.Name ?? uncategorizedName,
-                e.Category?.Color ?? uncategorizedColor,
-                e.Description);
-        }
+            var categoryName = series.Category?.Name ?? uncategorizedName;
+            var categoryColor = series.Category?.Color ?? uncategorizedColor;
 
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-
-            foreach (var (date, _) in occurrences)
+            foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (exception.IsDeleted) continue;
-                    yield return (date, scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date),
-                        exception.Paycheck?.Description ?? exception.Invoice?.Description ?? otherSource,
-                        exception.Category?.Name ?? uncategorizedName,
-                        exception.Category?.Color ?? uncategorizedColor,
-                        exception.Description);
-                }
-                else
-                {
-                    yield return (date, scope.ConvertToPrimary(s.Amount, s.Currency, date),
-                        s.Paycheck?.Description ?? s.Invoice?.Description ?? otherSource,
-                        s.Category?.Name ?? uncategorizedName,
-                        s.Category?.Color ?? uncategorizedColor,
-                        s.Description);
-                }
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var source = occurrence.Segment.PaycheckSeries?.Description
+                    ?? occurrence.Segment.InvoiceSeries?.Description
+                    ?? otherSource;
+
+                yield return (
+                    occurrence.Date,
+                    scope.ConvertToPrimary(amount, currency, occurrence.Date),
+                    source,
+                    categoryName,
+                    categoryColor,
+                    series.Description);
             }
         }
-    }
-
-    private static decimal SumExpandedAmounts(IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
-    {
-        var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
-
-        var total = oneOffs
-            .Where(e => e.Date >= startDate && e.Date <= endDate)
-            .Sum(e => scope.ConvertToPrimary(e.Amount, e.Currency, e.Date));
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-
-            foreach (var (date, _) in occurrences)
-            {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (!exception.IsDeleted)
-                        total += scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date);
-                }
-                else
-                {
-                    total += scope.ConvertToPrimary(s.Amount, s.Currency, date);
-                }
-            }
-        }
-
-        return total;
     }
 }

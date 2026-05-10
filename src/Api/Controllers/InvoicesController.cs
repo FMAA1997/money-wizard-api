@@ -32,11 +32,11 @@ public sealed class InvoicesController(IInvoiceService invoiceService) : ErrorCo
         => MatchOk(await invoiceService.GetById(id, cancellationToken));
 
     [HttpPost]
-    public async Task<ActionResult<Invoice>> Create([FromBody] CreateInvoiceRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<InvoiceSeries>> Create([FromBody] CreateInvoiceRequest request, CancellationToken cancellationToken)
         => MatchOk(await invoiceService.Create(request, cancellationToken));
 
     [HttpPut("{id:guid}")]
-    public async Task<ActionResult<Invoice>> Update(Guid id, [FromBody] UpdateInvoiceRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<InvoiceSeries>> Update(Guid id, [FromBody] UpdateInvoiceRequest request, CancellationToken cancellationToken)
         => MatchOk(await invoiceService.Update(id, request, cancellationToken));
 
     [HttpDelete("{id:guid}")]
@@ -49,8 +49,8 @@ public sealed class InvoicesController(IInvoiceService invoiceService) : ErrorCo
         => MatchOk(await invoiceService.UpdateOccurrence(id, date, request, cancellationToken));
 
     [HttpPut("{id:guid}/from/{date}")]
-    public async Task<ActionResult<Invoice>> UpdateFromDate(
-        Guid id, DateOnly date, [FromBody] UpdateInvoiceRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<InvoiceSeries>> UpdateFromDate(
+        Guid id, DateOnly date, [FromBody] UpdateInvoiceFromDateRequest request, CancellationToken cancellationToken)
         => MatchOk(await invoiceService.UpdateFromDate(id, date, request, cancellationToken));
 
     [HttpDelete("{id:guid}/occurrence/{date}")]

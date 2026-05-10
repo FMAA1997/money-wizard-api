@@ -247,49 +247,22 @@ public sealed class InvestmentStatisticsService(
     }
 
     private static DateOnly? AccumulateExpenses(
-        IReadOnlyList<Expense> expenses,
+        IReadOnlyList<ExpenseSeries> seriesList,
         DateOnly startDate,
         DateOnly endDate,
         CurrencyTotals totals)
     {
         DateOnly? earliest = null;
 
-        var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
-
-        foreach (var e in oneOffs.Where(e => e.Date >= startDate && e.Date <= endDate))
+        foreach (var series in seriesList)
         {
-            totals.Add(e.Amount, e.Currency, e.Date);
-            if (earliest is null || e.Date < earliest)
-                earliest = e.Date;
-        }
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-
-            foreach (var (date, _) in occurrences)
+            foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                decimal amount;
-                string currency;
-                DateOnly conversionDate;
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (exception.IsDeleted)
-                        continue;
-                    amount = exception.Amount;
-                    currency = exception.Currency;
-                    conversionDate = exception.Date;
-                }
-                else
-                {
-                    amount = s.Amount;
-                    currency = s.Currency;
-                    conversionDate = date;
-                }
-
-                totals.Add(amount, currency, conversionDate);
-                if (earliest is null || date < earliest)
-                    earliest = date;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                totals.Add(amount, currency, occurrence.Date);
+                if (earliest is null || occurrence.Date < earliest)
+                    earliest = occurrence.Date;
             }
         }
 
@@ -297,49 +270,22 @@ public sealed class InvestmentStatisticsService(
     }
 
     private static DateOnly? AccumulatePaychecks(
-        IReadOnlyList<Paycheck> paychecks,
+        IReadOnlyList<PaycheckSeries> seriesList,
         DateOnly startDate,
         DateOnly endDate,
         CurrencyTotals totals)
     {
         DateOnly? earliest = null;
 
-        var (oneOffs, series, exceptionLookup) = ClassifyPaychecks(paychecks);
-
-        foreach (var p in oneOffs.Where(p => p.Date >= startDate && p.Date <= endDate))
+        foreach (var series in seriesList)
         {
-            totals.Add(p.Amount, p.Currency, p.Date);
-            if (earliest is null || p.Date < earliest)
-                earliest = p.Date;
-        }
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-
-            foreach (var (date, _) in occurrences)
+            foreach (var occurrence in PaycheckSeriesExpander.Expand(series, startDate, endDate))
             {
-                decimal amount;
-                string currency;
-                DateOnly conversionDate;
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (exception.IsDeleted)
-                        continue;
-                    amount = exception.Amount;
-                    currency = exception.Currency;
-                    conversionDate = exception.Date;
-                }
-                else
-                {
-                    amount = s.Amount;
-                    currency = s.Currency;
-                    conversionDate = date;
-                }
-
-                totals.Add(amount, currency, conversionDate);
-                if (earliest is null || date < earliest)
-                    earliest = date;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                totals.Add(amount, currency, occurrence.Date);
+                if (earliest is null || occurrence.Date < earliest)
+                    earliest = occurrence.Date;
             }
         }
 
@@ -347,115 +293,27 @@ public sealed class InvestmentStatisticsService(
     }
 
     private static DateOnly? AccumulateInvoices(
-        IReadOnlyList<Invoice> invoices,
+        IReadOnlyList<InvoiceSeries> seriesList,
         DateOnly startDate,
         DateOnly endDate,
         CurrencyTotals totals)
     {
         DateOnly? earliest = null;
 
-        var (oneOffs, series, exceptionLookup) = ClassifyInvoices(invoices);
-
-        foreach (var i in oneOffs.Where(i => i.Date >= startDate && i.Date <= endDate))
+        foreach (var series in seriesList)
         {
-            var sign = SignOf(i.Type);
-            totals.Add(sign * i.Amount, i.Currency, i.Date);
-            if (earliest is null || i.Date < earliest)
-                earliest = i.Date;
-        }
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-            var sign = SignOf(s.Type);
-
-            foreach (var (date, _) in occurrences)
+            var sign = SignOf(series.Type);
+            foreach (var occurrence in InvoiceSeriesExpander.Expand(series, startDate, endDate))
             {
-                decimal amount;
-                string currency;
-                DateOnly conversionDate;
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (exception.IsDeleted)
-                        continue;
-                    amount = exception.Amount;
-                    currency = exception.Currency;
-                    conversionDate = exception.Date;
-                }
-                else
-                {
-                    amount = s.Amount;
-                    currency = s.Currency;
-                    conversionDate = date;
-                }
-
-                totals.Add(sign * amount, currency, conversionDate);
-                if (earliest is null || date < earliest)
-                    earliest = date;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                totals.Add(sign * amount, currency, occurrence.Date);
+                if (earliest is null || occurrence.Date < earliest)
+                    earliest = occurrence.Date;
             }
         }
 
         return earliest;
-    }
-
-    private static (List<Expense> OneOffs, List<Expense> Series, Dictionary<(Guid, DateOnly), Expense> ExceptionLookup)
-        ClassifyExpenses(IReadOnlyList<Expense> expenses)
-    {
-        var oneOffs = new List<Expense>();
-        var series = new List<Expense>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Expense>();
-
-        foreach (var e in expenses)
-        {
-            if (e.RecurrenceRule is not null)
-                series.Add(e);
-            else if (e.RecurringExpenseId.HasValue && e.OriginalDate.HasValue)
-                exceptionLookup[(e.RecurringExpenseId.Value, e.OriginalDate.Value)] = e;
-            else
-                oneOffs.Add(e);
-        }
-
-        return (oneOffs, series, exceptionLookup);
-    }
-
-    private static (List<Paycheck> OneOffs, List<Paycheck> Series, Dictionary<(Guid, DateOnly), Paycheck> ExceptionLookup)
-        ClassifyPaychecks(IReadOnlyList<Paycheck> paychecks)
-    {
-        var oneOffs = new List<Paycheck>();
-        var series = new List<Paycheck>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Paycheck>();
-
-        foreach (var p in paychecks)
-        {
-            if (p.RecurrenceRule is not null)
-                series.Add(p);
-            else if (p.RecurringPaycheckId.HasValue && p.OriginalDate.HasValue)
-                exceptionLookup[(p.RecurringPaycheckId.Value, p.OriginalDate.Value)] = p;
-            else
-                oneOffs.Add(p);
-        }
-
-        return (oneOffs, series, exceptionLookup);
-    }
-
-    private static (List<Invoice> OneOffs, List<Invoice> Series, Dictionary<(Guid, DateOnly), Invoice> ExceptionLookup)
-        ClassifyInvoices(IReadOnlyList<Invoice> invoices)
-    {
-        var oneOffs = new List<Invoice>();
-        var series = new List<Invoice>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Invoice>();
-
-        foreach (var i in invoices)
-        {
-            if (i.RecurrenceRule is not null)
-                series.Add(i);
-            else if (i.RecurringInvoiceId.HasValue && i.OriginalDate.HasValue)
-                exceptionLookup[(i.RecurringInvoiceId.Value, i.OriginalDate.Value)] = i;
-            else
-                oneOffs.Add(i);
-        }
-
-        return (oneOffs, series, exceptionLookup);
     }
 
     private static decimal SignOf(InvoiceType type) =>

@@ -33,8 +33,8 @@ public class InvoiceServiceTests
     [Fact]
     public async Task GetCalendar_RecurringInvoiceWithNumber_ExpandsNumberPerOccurrence()
     {
-        var series = BuildRecurringSeries(number: 100L, totalInstallments: 3);
-        SetupRepositoryReturns(series);
+        var series = BuildRecurringSeries(baseNumber: 100L, totalInstallments: 3);
+        SetupRangeReturns(series);
 
         var result = await _sut.GetCalendar(new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31));
 
@@ -49,8 +49,8 @@ public class InvoiceServiceTests
     [Fact]
     public async Task GetCalendar_RecurringInvoiceWithoutNumber_ReturnsNullNumbers()
     {
-        var series = BuildRecurringSeries(number: null, totalInstallments: 3);
-        SetupRepositoryReturns(series);
+        var series = BuildRecurringSeries(baseNumber: null, totalInstallments: 3);
+        SetupRangeReturns(series);
 
         var result = await _sut.GetCalendar(new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31));
 
@@ -61,11 +61,11 @@ public class InvoiceServiceTests
     }
 
     [Fact]
-    public async Task GetCalendar_OccurrenceOverrideWithExplicitNumber_UsesOverride()
+    public async Task GetCalendar_OccurrenceOverrideWithFrozenNumber_UsesFrozen()
     {
-        var series = BuildRecurringSeries(number: 100L, totalInstallments: 3);
-        var exception = BuildException(series, occurrenceDate: new DateOnly(2026, 2, 15), number: 9999L);
-        SetupRepositoryReturns(series, exception);
+        var series = BuildRecurringSeries(baseNumber: 100L, totalInstallments: 3);
+        AddException(series, originalDate: new DateOnly(2026, 2, 15), number: 9999L);
+        SetupRangeReturns(series);
 
         var result = await _sut.GetCalendar(new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31));
 
@@ -81,9 +81,9 @@ public class InvoiceServiceTests
     [Fact]
     public async Task GetCalendar_OccurrenceOverrideWithoutNumber_FallsBackToComputed()
     {
-        var series = BuildRecurringSeries(number: 100L, totalInstallments: 3);
-        var exception = BuildException(series, occurrenceDate: new DateOnly(2026, 2, 15), number: null);
-        SetupRepositoryReturns(series, exception);
+        var series = BuildRecurringSeries(baseNumber: 100L, totalInstallments: 3);
+        AddException(series, originalDate: new DateOnly(2026, 2, 15), number: null);
+        SetupRangeReturns(series);
 
         var result = await _sut.GetCalendar(new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31));
 
@@ -96,10 +96,10 @@ public class InvoiceServiceTests
     [Fact]
     public async Task GetCalendar_ClassAndPointOfSaleConstantAcrossOccurrences()
     {
-        var series = BuildRecurringSeries(number: 100L, totalInstallments: 3);
+        var series = BuildRecurringSeries(baseNumber: 100L, totalInstallments: 3);
         series.Class = InvoiceClass.A;
         series.PointOfSale = 1;
-        SetupRepositoryReturns(series);
+        SetupRangeReturns(series);
 
         var result = await _sut.GetCalendar(new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31));
 
@@ -111,24 +111,24 @@ public class InvoiceServiceTests
     [Fact]
     public async Task GetCalendar_CreditNoteOneOff_SubtractsFromMonthTotal()
     {
-        var invoice = BuildOneOff(type: InvoiceType.Invoice, amount: 1000m, date: new DateOnly(2026, 3, 10));
-        var creditNote = BuildOneOff(type: InvoiceType.CreditNote, amount: 300m, date: new DateOnly(2026, 3, 20), parentInvoiceId: invoice.Id);
-        SetupRepositoryReturns(invoice, creditNote);
+        var invoice = BuildOneOffSeries(type: InvoiceType.Invoice, amount: 1000m, date: new DateOnly(2026, 3, 10));
+        var creditNote = BuildOneOffSeries(type: InvoiceType.CreditNote, amount: 300m, date: new DateOnly(2026, 3, 20));
+        SetupRangeReturns(invoice, creditNote);
 
         var result = await _sut.GetCalendar(new DateOnly(2026, 3, 1), new DateOnly(2026, 3, 31));
 
         result.IsError.Should().BeFalse();
         var monthIndex = result.Value.Months.IndexOf("2026-03");
-        monthIndex.Should().BeGreaterOrEqualTo(0);
+        monthIndex.Should().BeGreaterThanOrEqualTo(0);
         result.Value.Totals[monthIndex]["USD"].Should().Be(700m);
     }
 
     [Fact]
     public async Task GetCalendar_DebitNoteOneOff_AddsToMonthTotal()
     {
-        var invoice = BuildOneOff(type: InvoiceType.Invoice, amount: 1000m, date: new DateOnly(2026, 3, 10));
-        var debitNote = BuildOneOff(type: InvoiceType.DebitNote, amount: 150m, date: new DateOnly(2026, 3, 25), parentInvoiceId: invoice.Id);
-        SetupRepositoryReturns(invoice, debitNote);
+        var invoice = BuildOneOffSeries(type: InvoiceType.Invoice, amount: 1000m, date: new DateOnly(2026, 3, 10));
+        var debitNote = BuildOneOffSeries(type: InvoiceType.DebitNote, amount: 150m, date: new DateOnly(2026, 3, 25));
+        SetupRangeReturns(invoice, debitNote);
 
         var result = await _sut.GetCalendar(new DateOnly(2026, 3, 1), new DateOnly(2026, 3, 31));
 
@@ -138,29 +138,9 @@ public class InvoiceServiceTests
     }
 
     [Fact]
-    public async Task GetCalendar_RecurringCreditNote_AllOccurrencesSubtract()
-    {
-        var parentInvoice = BuildOneOff(type: InvoiceType.Invoice, amount: 1000m, date: new DateOnly(2026, 1, 1));
-        var creditSeries = BuildRecurringSeries(number: null, totalInstallments: 3);
-        creditSeries.Type = InvoiceType.CreditNote;
-        creditSeries.ParentInvoiceId = parentInvoice.Id;
-        SetupRepositoryReturns(parentInvoice, creditSeries);
-
-        var result = await _sut.GetCalendar(new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31));
-
-        result.IsError.Should().BeFalse();
-        var janIndex = result.Value.Months.IndexOf("2026-01");
-        var febIndex = result.Value.Months.IndexOf("2026-02");
-        var marIndex = result.Value.Months.IndexOf("2026-03");
-        result.Value.Totals[janIndex]["USD"].Should().Be(900m);
-        result.Value.Totals[febIndex]["USD"].Should().Be(-100m);
-        result.Value.Totals[marIndex]["USD"].Should().Be(-100m);
-    }
-
-    [Fact]
     public async Task Create_CreditNoteWithoutParent_ReturnsParentRequired()
     {
-        var request = BuildCreateRequest(type: InvoiceType.CreditNote, parentInvoiceId: null);
+        var request = BuildCreateRequest(type: InvoiceType.CreditNote, parentSeriesId: null, parentOriginalDate: null);
 
         var result = await _sut.Create(request);
 
@@ -171,7 +151,7 @@ public class InvoiceServiceTests
     [Fact]
     public async Task Create_InvoiceWithParent_ReturnsParentNotAllowed()
     {
-        var request = BuildCreateRequest(type: InvoiceType.Invoice, parentInvoiceId: Guid.NewGuid());
+        var request = BuildCreateRequest(type: InvoiceType.Invoice, parentSeriesId: Guid.NewGuid(), parentOriginalDate: new DateOnly(2026, 1, 1));
 
         var result = await _sut.Create(request);
 
@@ -185,9 +165,9 @@ public class InvoiceServiceTests
         var parentId = Guid.NewGuid();
         _invoiceRepositoryMock
             .Setup(r => r.GetById(parentId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Invoice?)null);
+            .ReturnsAsync((InvoiceSeries?)null);
 
-        var request = BuildCreateRequest(type: InvoiceType.CreditNote, parentInvoiceId: parentId);
+        var request = BuildCreateRequest(type: InvoiceType.CreditNote, parentSeriesId: parentId, parentOriginalDate: new DateOnly(2026, 1, 1));
 
         var result = await _sut.Create(request);
 
@@ -198,12 +178,12 @@ public class InvoiceServiceTests
     [Fact]
     public async Task Create_CreditNoteWithCreditNoteParent_ReturnsParentMustBeInvoice()
     {
-        var parent = BuildOneOff(type: InvoiceType.CreditNote, amount: 100m, date: new DateOnly(2026, 1, 1));
+        var parent = BuildOneOffSeries(type: InvoiceType.CreditNote, amount: 100m, date: new DateOnly(2026, 1, 1));
         _invoiceRepositoryMock
             .Setup(r => r.GetById(parent.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parent);
 
-        var request = BuildCreateRequest(type: InvoiceType.CreditNote, parentInvoiceId: parent.Id);
+        var request = BuildCreateRequest(type: InvoiceType.CreditNote, parentSeriesId: parent.Id, parentOriginalDate: new DateOnly(2026, 1, 1));
 
         var result = await _sut.Create(request);
 
@@ -212,36 +192,187 @@ public class InvoiceServiceTests
     }
 
     [Fact]
-    public async Task Create_CreditNoteWithValidInvoiceParent_Succeeds()
+    public async Task Create_CreditNoteWithValidInvoiceParent_MaterializesParentExceptionAndSucceeds()
     {
-        var parent = BuildOneOff(type: InvoiceType.Invoice, amount: 1000m, date: new DateOnly(2026, 1, 1));
+        var parent = BuildRecurringSeries(baseNumber: 100L, totalInstallments: 12);
+        parent.Type = InvoiceType.Invoice;
         _invoiceRepositoryMock
             .Setup(r => r.GetById(parent.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parent);
+        _invoiceRepositoryMock
+            .Setup(r => r.GetException(parent.Id, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((InvoiceException?)null);
 
-        var request = BuildCreateRequest(type: InvoiceType.CreditNote, parentInvoiceId: parent.Id);
+        InvoiceException? capturedException = null;
+        _invoiceRepositoryMock
+            .Setup(r => r.AddException(It.IsAny<InvoiceException>(), It.IsAny<CancellationToken>()))
+            .Callback<InvoiceException, CancellationToken>((e, _) =>
+            {
+                capturedException = e;
+                parent.Exceptions.Add(e);
+            });
+
+        InvoiceSeries? capturedSeries = null;
+        _invoiceRepositoryMock
+            .Setup(r => r.Add(It.IsAny<InvoiceSeries>(), It.IsAny<CancellationToken>()))
+            .Callback<InvoiceSeries, CancellationToken>((s, _) => capturedSeries = s);
+
+        var request = BuildCreateRequest(
+            type: InvoiceType.CreditNote,
+            parentSeriesId: parent.Id,
+            parentOriginalDate: new DateOnly(2026, 6, 15));
 
         var result = await _sut.Create(request);
 
         result.IsError.Should().BeFalse();
-        result.Value.Type.Should().Be(InvoiceType.CreditNote);
-        result.Value.ParentInvoiceId.Should().Be(parent.Id);
+        capturedException.Should().NotBeNull();
+        capturedException!.OriginalDate.Should().Be(new DateOnly(2026, 6, 15));
+        capturedException.Number.Should().Be(105L); // BaseNumber 100 + globalIndex 5 (Jan..Jun -> indexes 0..5)
+        capturedException.IsDeleted.Should().BeFalse();
+
+        capturedSeries.Should().NotBeNull();
+        capturedSeries!.Type.Should().Be(InvoiceType.CreditNote);
+        capturedSeries.ParentExceptionId.Should().Be(capturedException.Id);
     }
 
-    private static Invoice BuildOneOff(InvoiceType type, decimal amount, DateOnly date, Guid? parentInvoiceId = null) =>
-        new()
+    [Fact]
+    public async Task Create_CreditNoteAgainstAlreadyDeletedParentOccurrence_ReturnsError()
+    {
+        var parent = BuildRecurringSeries(baseNumber: 100L, totalInstallments: 12);
+        parent.Type = InvoiceType.Invoice;
+        var existingException = new InvoiceException
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = parent.Id,
+            OriginalDate = new DateOnly(2026, 6, 15),
+            IsDeleted = true,
+        };
+        parent.Exceptions.Add(existingException);
+
+        _invoiceRepositoryMock
+            .Setup(r => r.GetById(parent.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+        _invoiceRepositoryMock
+            .Setup(r => r.GetException(parent.Id, new DateOnly(2026, 6, 15), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingException);
+
+        var request = BuildCreateRequest(
+            type: InvoiceType.CreditNote,
+            parentSeriesId: parent.Id,
+            parentOriginalDate: new DateOnly(2026, 6, 15));
+
+        var result = await _sut.Create(request);
+
+        result.IsError.Should().BeTrue();
+        result.FirstError.Should().Be(InvoiceErrors.ParentOccurrenceNotValid);
+    }
+
+    [Fact]
+    public async Task Create_CreditNoteAgainstExistingException_ReusesIt()
+    {
+        var parent = BuildRecurringSeries(baseNumber: 100L, totalInstallments: 12);
+        parent.Type = InvoiceType.Invoice;
+        var existingException = new InvoiceException
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = parent.Id,
+            OriginalDate = new DateOnly(2026, 6, 15),
+            Number = 105L,
+            IsDeleted = false,
+        };
+        parent.Exceptions.Add(existingException);
+
+        _invoiceRepositoryMock
+            .Setup(r => r.GetById(parent.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+        _invoiceRepositoryMock
+            .Setup(r => r.GetException(parent.Id, new DateOnly(2026, 6, 15), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingException);
+
+        var addExceptionCalled = false;
+        _invoiceRepositoryMock
+            .Setup(r => r.AddException(It.IsAny<InvoiceException>(), It.IsAny<CancellationToken>()))
+            .Callback(() => addExceptionCalled = true);
+
+        InvoiceSeries? capturedSeries = null;
+        _invoiceRepositoryMock
+            .Setup(r => r.Add(It.IsAny<InvoiceSeries>(), It.IsAny<CancellationToken>()))
+            .Callback<InvoiceSeries, CancellationToken>((s, _) => capturedSeries = s);
+
+        var request = BuildCreateRequest(
+            type: InvoiceType.CreditNote,
+            parentSeriesId: parent.Id,
+            parentOriginalDate: new DateOnly(2026, 6, 15));
+
+        var result = await _sut.Create(request);
+
+        result.IsError.Should().BeFalse();
+        addExceptionCalled.Should().BeFalse();
+        capturedSeries!.ParentExceptionId.Should().Be(existingException.Id);
+    }
+
+    private static InvoiceSeries BuildRecurringSeries(long? baseNumber, int totalInstallments)
+    {
+        var series = new InvoiceSeries
         {
             Id = Guid.NewGuid(),
             UserId = UserId,
-            Date = date,
-            Amount = amount,
+            Description = "Rent",
+            Type = InvoiceType.Invoice,
+            BaseNumber = baseNumber,
+        };
+        series.Segments.Add(new InvoiceSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            EffectiveFrom = new DateOnly(2026, 1, 15),
+            Amount = 100m,
             Currency = "USD",
+            RecurrenceRule = new RecurrenceRule
+            {
+                Frequency = RecurrenceFrequency.Monthly,
+                Interval = 1,
+                EndDate = null,
+                TotalInstallments = totalInstallments,
+            },
+        });
+        return series;
+    }
+
+    private static InvoiceSeries BuildOneOffSeries(InvoiceType type, decimal amount, DateOnly date)
+    {
+        var series = new InvoiceSeries
+        {
+            Id = Guid.NewGuid(),
+            UserId = UserId,
             Description = type.ToString(),
             Type = type,
-            ParentInvoiceId = parentInvoiceId
         };
+        series.Segments.Add(new InvoiceSegment
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            EffectiveFrom = date,
+            Amount = amount,
+            Currency = "USD",
+        });
+        return series;
+    }
 
-    private static CreateInvoiceRequest BuildCreateRequest(InvoiceType type, Guid? parentInvoiceId) =>
+    private static void AddException(InvoiceSeries series, DateOnly originalDate, long? number)
+    {
+        series.Exceptions.Add(new InvoiceException
+        {
+            Id = Guid.NewGuid(),
+            SeriesId = series.Id,
+            OriginalDate = originalDate,
+            Date = originalDate,
+            Number = number,
+            IsDeleted = false,
+        });
+    }
+
+    private static CreateInvoiceRequest BuildCreateRequest(InvoiceType type, Guid? parentSeriesId, DateOnly? parentOriginalDate) =>
         new(
             Date: new DateOnly(2026, 3, 10),
             Amount: 100m,
@@ -249,50 +380,18 @@ public class InvoiceServiceTests
             Description: "Test",
             Source: null,
             Type: type,
-            ParentInvoiceId: parentInvoiceId,
+            ParentInvoiceSeriesId: parentSeriesId,
+            ParentOriginalDate: parentOriginalDate,
             Class: null,
             PointOfSale: null,
-            Number: null,
+            BaseNumber: null,
             Recurrence: null);
 
-    private static Invoice BuildRecurringSeries(long? number, int totalInstallments) =>
-        new()
-        {
-            Id = Guid.NewGuid(),
-            UserId = UserId,
-            Date = new DateOnly(2026, 1, 15),
-            Amount = 100m,
-            Currency = "USD",
-            Description = "Rent",
-            Number = number,
-            RecurrenceRule = new RecurrenceRule
-            {
-                Frequency = RecurrenceFrequency.Monthly,
-                Interval = 1,
-                EndDate = null,
-                TotalInstallments = totalInstallments
-            }
-        };
-
-    private static Invoice BuildException(Invoice series, DateOnly occurrenceDate, long? number) =>
-        new()
-        {
-            Id = Guid.NewGuid(),
-            UserId = UserId,
-            Date = occurrenceDate,
-            Amount = series.Amount,
-            Currency = series.Currency,
-            Description = series.Description,
-            Number = number,
-            RecurringInvoiceId = series.Id,
-            OriginalDate = occurrenceDate
-        };
-
-    private void SetupRepositoryReturns(params Invoice[] invoices)
+    private void SetupRangeReturns(params InvoiceSeries[] seriesList)
     {
         _invoiceRepositoryMock
             .Setup(r => r.GetByUserIdInRange(UserId, It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(invoices);
+            .ReturnsAsync(seriesList);
     }
 
     private static List<Application.DTOs.Invoice.InvoiceResponse> GetOrderedOccurrences(

@@ -11,11 +11,11 @@ public sealed class User : Entity
     public string Country { get; set; } = "row";
 
     [JsonIgnore]
-    public ICollection<Paycheck> Paychecks { get; set; } = [];
+    public ICollection<PaycheckSeries> PaycheckSeries { get; set; } = [];
     [JsonIgnore]
-    public ICollection<Invoice> Invoices { get; set; } = [];
+    public ICollection<InvoiceSeries> InvoiceSeries { get; set; } = [];
     [JsonIgnore]
-    public ICollection<Expense> Expenses { get; set; } = [];
+    public ICollection<ExpenseSeries> ExpenseSeries { get; set; } = [];
     [JsonIgnore]
     public ICollection<ExpenseCategory> ExpenseCategories { get; set; } = [];
     [JsonIgnore]

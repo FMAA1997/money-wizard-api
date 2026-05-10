@@ -29,21 +29,18 @@ public sealed class DashboardService(
 
         var userId = currentUserProvider.UserId;
 
-        var paychecks = await paycheckRepository.GetByUserIdInRange(userId, from, to, cancellationToken);
-        var invoices = await invoiceRepository.GetByUserIdInRange(userId, from, to, cancellationToken);
-        var expenses = await expenseRepository.GetByUserIdInRange(userId, from, to, cancellationToken);
+        var paycheckSeries = await paycheckRepository.GetByUserIdInRange(userId, from, to, cancellationToken);
+        var invoiceSeriesList = await invoiceRepository.GetByUserIdInRange(userId, from, to, cancellationToken);
+        var invoices = invoiceSeriesList; // alias used below
+        var expenseSeriesList = await expenseRepository.GetByUserIdInRange(userId, from, to, cancellationToken);
 
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var paycheckTotals = ExpandPaycheckTotals(paychecks, from, to, scope);
+        var paycheckTotals = ExpandPaycheckTotals(paycheckSeries, from, to, scope);
         var (invoiceTotals, invoiceSources) = ExpandInvoiceTotals(invoices, from, to, scope);
 
-        var paycheckMeta = paychecks
-            .Where(p => p.RecurringPaycheckId is null)
-            .ToDictionary(p => p.Id, p => p.Description);
-        var invoiceMeta = invoices
-            .Where(i => i.RecurringInvoiceId is null)
-            .ToDictionary(i => i.Id, i => i.Description);
+        var paycheckMeta = paycheckSeries.ToDictionary(s => s.Id, s => s.Description);
+        var invoiceMeta = invoices.ToDictionary(s => s.Id, s => s.Description);
 
         var invoiceCategoryFlows = new Dictionary<(Guid InvoiceId, string Category), decimal>();
         var paycheckToOtherInvoice = new Dictionary<Guid, decimal>();
@@ -52,18 +49,18 @@ public sealed class DashboardService(
         var otherOrphanToCategory = new Dictionary<string, decimal>();
         var categoryColors = new Dictionary<string, string>();
 
-        foreach (var (date, amount, expense) in ExpandExpenseOccurrences(expenses, from, to, scope))
+        foreach (var (date, amount, series, segment) in ExpandExpenseOccurrences(expenseSeriesList, from, to, scope))
         {
-            var categoryName = expense.Category?.Name ?? Uncategorized;
-            var categoryColor = expense.Category?.Color ?? UncategorizedColor;
+            var categoryName = series.Category?.Name ?? Uncategorized;
+            var categoryColor = series.Category?.Color ?? UncategorizedColor;
             categoryColors[categoryName] = categoryColor;
 
-            if (expense.InvoiceId is { } invoiceId && invoiceMeta.ContainsKey(invoiceId))
+            if (segment.InvoiceSeriesId is { } invoiceId && invoiceMeta.ContainsKey(invoiceId))
             {
                 var key = (invoiceId, categoryName);
                 invoiceCategoryFlows[key] = invoiceCategoryFlows.GetValueOrDefault(key) + amount;
             }
-            else if (expense.PaycheckId is { } paycheckId && paycheckMeta.ContainsKey(paycheckId))
+            else if (segment.PaycheckSeriesId is { } paycheckId && paycheckMeta.ContainsKey(paycheckId))
             {
                 paycheckToOtherInvoice[paycheckId] = paycheckToOtherInvoice.GetValueOrDefault(paycheckId) + amount;
                 paycheckOtherInvoiceToCategory[categoryName] = paycheckOtherInvoiceToCategory.GetValueOrDefault(categoryName) + amount;
@@ -137,32 +134,32 @@ public sealed class DashboardService(
         var monthStart = new DateOnly(today.Year, today.Month, 1);
         var monthEnd = monthStart.AddMonths(1).AddDays(-1);
 
-        var paychecks = await paycheckRepository.GetByUserIdInRange(userId, yearStart, yearEnd, cancellationToken);
+        var paycheckSeries = await paycheckRepository.GetByUserIdInRange(userId, yearStart, yearEnd, cancellationToken);
         var invoices = await invoiceRepository.GetByUserIdInRange(userId, yearStart, yearEnd, cancellationToken);
-        var expenses = await expenseRepository.GetByUserIdInRange(userId, yearStart, yearEnd, cancellationToken);
+        var expenseSeriesList = await expenseRepository.GetByUserIdInRange(userId, yearStart, yearEnd, cancellationToken);
         var hasInvoices = await invoiceRepository.AnyForUser(userId, cancellationToken);
 
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         return new DashboardResults
         {
-            CurrentMonth = BuildPeriod(paychecks, invoices, expenses, monthStart, monthEnd, hasInvoices, scope),
-            YearToDate = BuildPeriod(paychecks, invoices, expenses, yearStart, today, hasInvoices, scope),
-            YearProjected = BuildPeriod(paychecks, invoices, expenses, yearStart, yearEnd, hasInvoices, scope),
+            CurrentMonth = BuildPeriod(paycheckSeries, invoices, expenseSeriesList, monthStart, monthEnd, hasInvoices, scope),
+            YearToDate = BuildPeriod(paycheckSeries, invoices, expenseSeriesList, yearStart, today, hasInvoices, scope),
+            YearProjected = BuildPeriod(paycheckSeries, invoices, expenseSeriesList, yearStart, yearEnd, hasInvoices, scope),
         };
     }
 
     private static DashboardResultPeriod BuildPeriod(
-        IReadOnlyList<Paycheck> paychecks,
-        IReadOnlyList<Invoice> invoices,
-        IReadOnlyList<Expense> expenses,
+        IReadOnlyList<PaycheckSeries> paycheckSeries,
+        IReadOnlyList<InvoiceSeries> invoices,
+        IReadOnlyList<ExpenseSeries> expenseSeriesList,
         DateOnly from,
         DateOnly to,
         bool hasInvoices,
         CurrencyScope scope)
     {
-        var paychecksDict = SumPaychecks(paychecks, from, to, scope).ToDictionary();
-        var expensesDict = SumExpenses(expenses, from, to, scope).ToDictionary();
+        var paychecksDict = SumPaychecks(paycheckSeries, from, to, scope).ToDictionary();
+        var expensesDict = SumExpenses(expenseSeriesList, from, to, scope).ToDictionary();
 
         if (!hasInvoices)
         {
@@ -187,85 +184,49 @@ public sealed class DashboardService(
         };
     }
 
-    private static CurrencyTotals SumPaychecks(IReadOnlyList<Paycheck> paychecks, DateOnly from, DateOnly to, CurrencyScope scope)
+    private static CurrencyTotals SumPaychecks(IReadOnlyList<PaycheckSeries> seriesList, DateOnly from, DateOnly to, CurrencyScope scope)
     {
         var totals = scope.NewTotals();
-        var (oneOffs, series, exceptionLookup) = ClassifyPaychecks(paychecks);
-
-        foreach (var p in oneOffs.Where(p => p.Date >= from && p.Date <= to))
-            totals.Add(p.Amount, p.Currency, p.Date);
-
-        foreach (var s in series)
+        foreach (var series in seriesList)
         {
-            foreach (var (date, _) in RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, from, to))
+            foreach (var occurrence in PaycheckSeriesExpander.Expand(series, from, to))
             {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (!exception.IsDeleted)
-                        totals.Add(exception.Amount, exception.Currency, exception.Date);
-                }
-                else
-                {
-                    totals.Add(s.Amount, s.Currency, date);
-                }
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                totals.Add(amount, currency, occurrence.Date);
             }
         }
-
         return totals;
     }
 
-    private static CurrencyTotals SumExpenses(IReadOnlyList<Expense> expenses, DateOnly from, DateOnly to, CurrencyScope scope)
+    private static CurrencyTotals SumExpenses(IReadOnlyList<ExpenseSeries> seriesList, DateOnly from, DateOnly to, CurrencyScope scope)
     {
         var totals = scope.NewTotals();
-        var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
-
-        foreach (var e in oneOffs.Where(e => e.Date >= from && e.Date <= to))
-            totals.Add(e.Amount, e.Currency, e.Date);
-
-        foreach (var s in series)
+        foreach (var series in seriesList)
         {
-            foreach (var (date, _) in RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, from, to))
+            foreach (var occurrence in ExpenseSeriesExpander.Expand(series, from, to))
             {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (!exception.IsDeleted)
-                        totals.Add(exception.Amount, exception.Currency, exception.Date);
-                }
-                else
-                {
-                    totals.Add(s.Amount, s.Currency, date);
-                }
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                totals.Add(amount, currency, occurrence.Date);
             }
         }
-
         return totals;
     }
 
-    private static CurrencyTotals SumInvoices(IReadOnlyList<Invoice> invoices, DateOnly from, DateOnly to, CurrencyScope scope)
+    private static CurrencyTotals SumInvoices(IReadOnlyList<InvoiceSeries> seriesList, DateOnly from, DateOnly to, CurrencyScope scope)
     {
         var totals = scope.NewTotals();
-        var (oneOffs, series, exceptionLookup) = ClassifyInvoices(invoices);
-
-        foreach (var i in oneOffs.Where(i => i.Date >= from && i.Date <= to))
-            totals.Add(Sign(i.Type) * i.Amount, i.Currency, i.Date);
-
-        foreach (var s in series)
+        foreach (var series in seriesList)
         {
-            var sign = Sign(s.Type);
-            foreach (var (date, _) in RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, from, to))
+            var sign = Sign(series.Type);
+            foreach (var occurrence in InvoiceSeriesExpander.Expand(series, from, to))
             {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (!exception.IsDeleted)
-                        totals.Add(sign * exception.Amount, exception.Currency, exception.Date);
-                }
-                else
-                {
-                    totals.Add(sign * s.Amount, s.Currency, date);
-                }
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                totals.Add(sign * amount, currency, occurrence.Date);
             }
         }
-
         return totals;
     }
 
@@ -419,154 +380,57 @@ public sealed class DashboardService(
     }
 
     private static Dictionary<Guid, decimal> ExpandPaycheckTotals(
-        IReadOnlyList<Paycheck> paychecks, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+        IReadOnlyList<PaycheckSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         var totals = new Dictionary<Guid, decimal>();
-        var (oneOffs, series, exceptionLookup) = ClassifyPaychecks(paychecks);
-
-        foreach (var p in oneOffs.Where(p => p.Date >= startDate && p.Date <= endDate))
-            totals[p.Id] = totals.GetValueOrDefault(p.Id) + scope.ConvertToPrimary(p.Amount, p.Currency, p.Date);
-
-        foreach (var s in series)
+        foreach (var series in seriesList)
         {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-            foreach (var (date, _) in occurrences)
+            foreach (var occurrence in PaycheckSeriesExpander.Expand(series, startDate, endDate))
             {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (exception.IsDeleted) continue;
-                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date);
-                }
-                else
-                {
-                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + scope.ConvertToPrimary(s.Amount, s.Currency, date);
-                }
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                totals[series.Id] = totals.GetValueOrDefault(series.Id) + scope.ConvertToPrimary(amount, currency, occurrence.Date);
             }
         }
-
         return totals;
     }
 
     private static (Dictionary<Guid, decimal> Totals, Dictionary<Guid, Guid?> Sources) ExpandInvoiceTotals(
-        IReadOnlyList<Invoice> invoices, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+        IReadOnlyList<InvoiceSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         var totals = new Dictionary<Guid, decimal>();
         var sources = new Dictionary<Guid, Guid?>();
-        var (oneOffs, series, exceptionLookup) = ClassifyInvoices(invoices);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        foreach (var i in oneOffs.Where(i => i.Date >= startDate && i.Date <= endDate))
+        foreach (var series in seriesList)
         {
-            var sign = Sign(i.Type);
-            totals[i.Id] = totals.GetValueOrDefault(i.Id) + sign * scope.ConvertToPrimary(i.Amount, i.Currency, i.Date);
-            sources[i.Id] = i.Source;
-        }
-
-        foreach (var s in series)
-        {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-            var sign = Sign(s.Type);
-            foreach (var (date, _) in occurrences)
+            var sign = Sign(series.Type);
+            foreach (var occurrence in InvoiceSeriesExpander.Expand(series, startDate, endDate))
             {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (exception.IsDeleted) continue;
-                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + sign * scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date);
-                }
-                else
-                {
-                    totals[s.Id] = totals.GetValueOrDefault(s.Id) + sign * scope.ConvertToPrimary(s.Amount, s.Currency, date);
-                }
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                totals[series.Id] = totals.GetValueOrDefault(series.Id) + sign * scope.ConvertToPrimary(amount, currency, occurrence.Date);
             }
-            sources[s.Id] = s.Source;
+
+            var activeSegment = InvoiceSeriesExpander.GetActiveSegment(series, today);
+            sources[series.Id] = activeSegment?.Source;
         }
 
         return (totals, sources);
     }
 
-    private static IEnumerable<(DateOnly Date, decimal Amount, Expense Expense)> ExpandExpenseOccurrences(
-        IReadOnlyList<Expense> expenses, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+    private static IEnumerable<(DateOnly Date, decimal Amount, ExpenseSeries Series, ExpenseSegment Segment)> ExpandExpenseOccurrences(
+        IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
-        var (oneOffs, series, exceptionLookup) = ClassifyExpenses(expenses);
-
-        foreach (var e in oneOffs.Where(e => e.Date >= startDate && e.Date <= endDate))
-            yield return (e.Date, scope.ConvertToPrimary(e.Amount, e.Currency, e.Date), e);
-
-        foreach (var s in series)
+        foreach (var series in seriesList)
         {
-            var occurrences = RecurrenceExpander.Expand(s.Date, s.RecurrenceRule!, startDate, endDate);
-            foreach (var (date, _) in occurrences)
+            foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                if (exceptionLookup.TryGetValue((s.Id, date), out var exception))
-                {
-                    if (exception.IsDeleted) continue;
-                    yield return (date, scope.ConvertToPrimary(exception.Amount, exception.Currency, exception.Date), exception);
-                }
-                else
-                {
-                    yield return (date, scope.ConvertToPrimary(s.Amount, s.Currency, date), s);
-                }
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                yield return (occurrence.Date, scope.ConvertToPrimary(amount, currency, occurrence.Date), series, occurrence.Segment);
             }
         }
-    }
-
-    private static (List<Paycheck> OneOffs, List<Paycheck> Series, Dictionary<(Guid, DateOnly), Paycheck> ExceptionLookup)
-        ClassifyPaychecks(IReadOnlyList<Paycheck> paychecks)
-    {
-        var oneOffs = new List<Paycheck>();
-        var series = new List<Paycheck>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Paycheck>();
-
-        foreach (var p in paychecks)
-        {
-            if (p.RecurrenceRule is not null)
-                series.Add(p);
-            else if (p.RecurringPaycheckId.HasValue && p.OriginalDate.HasValue)
-                exceptionLookup[(p.RecurringPaycheckId.Value, p.OriginalDate.Value)] = p;
-            else
-                oneOffs.Add(p);
-        }
-
-        return (oneOffs, series, exceptionLookup);
-    }
-
-    private static (List<Invoice> OneOffs, List<Invoice> Series, Dictionary<(Guid, DateOnly), Invoice> ExceptionLookup)
-        ClassifyInvoices(IReadOnlyList<Invoice> invoices)
-    {
-        var oneOffs = new List<Invoice>();
-        var series = new List<Invoice>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Invoice>();
-
-        foreach (var i in invoices)
-        {
-            if (i.RecurrenceRule is not null)
-                series.Add(i);
-            else if (i.RecurringInvoiceId.HasValue && i.OriginalDate.HasValue)
-                exceptionLookup[(i.RecurringInvoiceId.Value, i.OriginalDate.Value)] = i;
-            else
-                oneOffs.Add(i);
-        }
-
-        return (oneOffs, series, exceptionLookup);
-    }
-
-    private static (List<Expense> OneOffs, List<Expense> Series, Dictionary<(Guid, DateOnly), Expense> ExceptionLookup)
-        ClassifyExpenses(IReadOnlyList<Expense> expenses)
-    {
-        var oneOffs = new List<Expense>();
-        var series = new List<Expense>();
-        var exceptionLookup = new Dictionary<(Guid, DateOnly), Expense>();
-
-        foreach (var e in expenses)
-        {
-            if (e.RecurrenceRule is not null)
-                series.Add(e);
-            else if (e.RecurringExpenseId.HasValue && e.OriginalDate.HasValue)
-                exceptionLookup[(e.RecurringExpenseId.Value, e.OriginalDate.Value)] = e;
-            else
-                oneOffs.Add(e);
-        }
-
-        return (oneOffs, series, exceptionLookup);
     }
 
     private static decimal Sign(InvoiceType type) =>
