@@ -13,8 +13,9 @@ public interface IPaycheckRepository : IRepository<PaycheckSeries>
 
     Task AddException(PaycheckException exception, CancellationToken cancellationToken = default);
     void UpdateException(PaycheckException exception);
+    void DeleteException(PaycheckException exception);
 
-    Task<PaycheckException?> GetException(Guid seriesId, DateOnly originalDate, CancellationToken cancellationToken = default);
+    Task<PaycheckException?> GetException(Guid seriesId, DateOnly date, CancellationToken cancellationToken = default);
     Task DeleteExceptionsFromDate(Guid seriesId, DateOnly fromDate, CancellationToken cancellationToken = default);
     Task DeleteSegmentsFromDate(Guid seriesId, DateOnly fromDate, CancellationToken cancellationToken = default);
 }

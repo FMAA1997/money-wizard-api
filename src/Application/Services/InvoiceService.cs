@@ -145,27 +145,54 @@ public sealed class InvoiceService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
         var existing = await invoiceRepository.GetException(series.Id, date, cancellationToken);
+        var isRecurrence = InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date);
+
+        if (!isRecurrence && existing is null)
+        {
+            if (request.Amount is null || string.IsNullOrEmpty(request.Currency))
+                return RecurrenceErrors.InsertionRequiresAmountAndCurrency;
+            if (request.Number is null)
+                return InvoiceErrors.InsertionRequiresNumber;
+        }
+
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         InvoiceException exception;
-        if (existing is not null)
+        InvoiceSegment? segment;
+        int occurrenceIndex;
+        int globalIndex;
+
+        if (existing is not null && !existing.OriginalDate.HasValue)
+        {
+            existing.Date = date;
+            existing.Amount = request.Amount;
+            existing.Currency = request.Currency;
+            existing.Number = request.Number;
+            invoiceRepository.UpdateException(existing);
+            exception = existing;
+            segment = null;
+            occurrenceIndex = -1;
+            globalIndex = -1;
+        }
+        else if (existing is not null)
         {
             existing.Date = request.Date;
             existing.Amount = request.Amount;
             existing.Currency = request.Currency;
             existing.IsDeleted = false;
-            // Preserve frozen Number if present.
-
+            // Preserve frozen Number on overrides.
             invoiceRepository.UpdateException(existing);
             exception = existing;
+            segment = InvoiceSeriesExpander.GetSegmentForDate(series, date)!;
+            occurrenceIndex = segment.RecurrenceRule is null
+                ? 0
+                : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
+            globalIndex = InvoiceSeriesExpander.GetGlobalOccurrenceIndex(series, date);
         }
-        else
+        else if (isRecurrence)
         {
-            var globalIndex = InvoiceSeriesExpander.GetGlobalOccurrenceIndex(series, date);
+            globalIndex = InvoiceSeriesExpander.GetGlobalOccurrenceIndex(series, date);
             long? frozenNumber = series.BaseNumber + globalIndex;
 
             exception = new InvoiceException
@@ -179,15 +206,41 @@ public sealed class InvoiceService(
                 IsDeleted = false
             };
             await invoiceRepository.AddException(exception, cancellationToken);
+            segment = InvoiceSeriesExpander.GetSegmentForDate(series, date)!;
+            occurrenceIndex = segment.RecurrenceRule is null
+                ? 0
+                : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
+        }
+        else
+        {
+            exception = new InvoiceException
+            {
+                SeriesId = series.Id,
+                OriginalDate = null,
+                Date = date,
+                Amount = request.Amount,
+                Currency = request.Currency,
+                Number = request.Number,
+                IsDeleted = false
+            };
+            await invoiceRepository.AddException(exception, cancellationToken);
+            segment = null;
+            occurrenceIndex = -1;
+            globalIndex = -1;
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        // Reload to compute the per-occurrence representation through the expander.
-        var refreshed = (await invoiceRepository.GetById(series.Id, cancellationToken))!;
-        var occurrence = InvoiceSeriesExpander.Expand(refreshed, date, date)
-            .First(o => o.OriginalDate == date);
-        return MapOccurrence(occurrence, refreshed, scope);
+        var occurrence = new InvoiceOccurrence(
+            Date: exception.Date ?? date,
+            OriginalDate: exception.OriginalDate,
+            Segment: segment,
+            Exception: exception,
+            OccurrenceIndex: occurrenceIndex,
+            GlobalIndex: globalIndex,
+            Number: exception.Number);
+
+        return MapOccurrence(occurrence, series, scope);
     }
 
     public async Task<ErrorOr<InvoiceSeries>> UpdateFromDate(
@@ -238,12 +291,13 @@ public sealed class InvoiceService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
         var existing = await invoiceRepository.GetException(series.Id, date, cancellationToken);
 
-        if (existing is not null)
+        if (existing is not null && !existing.OriginalDate.HasValue)
+        {
+            invoiceRepository.DeleteException(existing);
+        }
+        else if (existing is not null)
         {
             existing.IsDeleted = true;
             existing.Date = null;
@@ -252,7 +306,7 @@ public sealed class InvoiceService(
             // Preserve frozen Number for fiscal record (even though the occurrence is skipped).
             invoiceRepository.UpdateException(existing);
         }
-        else
+        else if (InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date))
         {
             var exception = new InvoiceException
             {
@@ -261,6 +315,10 @@ public sealed class InvoiceService(
                 IsDeleted = true
             };
             await invoiceRepository.AddException(exception, cancellationToken);
+        }
+        else
+        {
+            return InvoiceErrors.NotFound;
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -393,7 +451,7 @@ public sealed class InvoiceService(
         if (parent.Type != InvoiceType.Invoice)
             return InvoiceErrors.ParentMustBeInvoice;
 
-        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(parent, parentOriginalDate.Value))
+        if (!InvoiceSeriesExpander.IsExistingOccurrence(parent, parentOriginalDate.Value))
             return InvoiceErrors.ParentOccurrenceNotValid;
 
         var existing = await invoiceRepository.GetException(parent.Id, parentOriginalDate.Value, cancellationToken);
@@ -404,6 +462,7 @@ public sealed class InvoiceService(
             return existing;
         }
 
+        // No row exists yet → date must be a recurrence-generated occurrence; materialize an override to freeze Number.
         var globalIndex = InvoiceSeriesExpander.GetGlobalOccurrenceIndex(parent, parentOriginalDate.Value);
         long? frozenNumber = parent.BaseNumber + globalIndex;
 
@@ -518,11 +577,13 @@ public sealed class InvoiceService(
 
     private static InvoiceResponse MapOccurrence(InvoiceOccurrence occurrence, InvoiceSeries series, CurrencyScope scope)
     {
-        var segment = occurrence.Segment!;
-        var amount = occurrence.Exception?.Amount ?? segment.Amount;
-        var currency = occurrence.Exception?.Currency ?? segment.Currency;
+        var segment = occurrence.Segment;
+        var amount = occurrence.Exception?.Amount ?? segment!.Amount;
+        var currency = occurrence.Exception?.Currency ?? segment!.Currency;
         var date = occurrence.Date;
-        var hasInstallments = segment.RecurrenceRule?.TotalInstallments is not null;
+        var rule = segment?.RecurrenceRule;
+        var hasInstallments = rule?.TotalInstallments is not null;
+        var isOverride = occurrence.Exception is not null && occurrence.OriginalDate.HasValue;
 
         return new InvoiceResponse(
             Id: occurrence.Exception?.Id ?? BuildOccurrenceId(series.Id, occurrence.OriginalDate!.Value),
@@ -531,26 +592,26 @@ public sealed class InvoiceService(
             Currency: currency,
             Amounts: scope.ConvertToDisplay(amount, currency, date),
             Description: series.Description,
-            Source: segment.Source,
+            Source: segment?.Source,
             Type: series.Type,
             ParentExceptionId: series.ParentExceptionId,
             Class: series.Class,
             PointOfSale: series.PointOfSale,
             Number: occurrence.Number,
-            IsRecurring: segment.RecurrenceRule is not null,
-            RecurringInvoiceId: segment.RecurrenceRule is not null ? series.Id : null,
-            OriginalDate: occurrence.Exception is null ? null : occurrence.OriginalDate,
-            IsOverride: occurrence.Exception is not null,
-            Recurrence: segment.RecurrenceRule is null
+            IsRecurring: rule is not null,
+            RecurringInvoiceId: rule is not null ? series.Id : null,
+            OriginalDate: isOverride ? occurrence.OriginalDate : null,
+            IsOverride: isOverride,
+            Recurrence: segment is null || rule is null
                 ? null
                 : new RecurrenceInfo(
                     segment.EffectiveFrom,
-                    segment.RecurrenceRule.Frequency,
-                    segment.RecurrenceRule.Interval,
-                    segment.RecurrenceRule.EndDate,
-                    segment.RecurrenceRule.TotalInstallments),
+                    rule.Frequency,
+                    rule.Interval,
+                    rule.EndDate,
+                    rule.TotalInstallments),
             InstallmentNumber: hasInstallments ? occurrence.OccurrenceIndex + 1 : null,
-            TotalInstallments: segment.RecurrenceRule?.TotalInstallments);
+            TotalInstallments: rule?.TotalInstallments);
     }
 
     private static Guid BuildOccurrenceId(Guid seriesId, DateOnly date)

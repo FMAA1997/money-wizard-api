@@ -61,13 +61,20 @@ public sealed class InvoiceRepository(MoneyWizardContext context) : IInvoiceRepo
     public void UpdateException(InvoiceException exception)
         => context.InvoiceExceptions.Update(exception);
 
-    public async Task<InvoiceException?> GetException(Guid seriesId, DateOnly originalDate, CancellationToken cancellationToken = default)
+    public void DeleteException(InvoiceException exception)
+        => context.InvoiceExceptions.Remove(exception);
+
+    public async Task<InvoiceException?> GetException(Guid seriesId, DateOnly date, CancellationToken cancellationToken = default)
         => await context.InvoiceExceptions
-            .FirstOrDefaultAsync(e => e.SeriesId == seriesId && e.OriginalDate == originalDate, cancellationToken);
+            .FirstOrDefaultAsync(
+                e => e.SeriesId == seriesId
+                    && (e.OriginalDate == date || (e.OriginalDate == null && e.Date == date)),
+                cancellationToken);
 
     public async Task DeleteExceptionsFromDate(Guid seriesId, DateOnly fromDate, CancellationToken cancellationToken = default)
         => await context.InvoiceExceptions
-            .Where(e => e.SeriesId == seriesId && e.OriginalDate >= fromDate)
+            .Where(e => e.SeriesId == seriesId
+                && (e.OriginalDate >= fromDate || (e.OriginalDate == null && e.Date >= fromDate)))
             .ExecuteDeleteAsync(cancellationToken);
 
     public async Task DeleteSegmentsFromDate(Guid seriesId, DateOnly fromDate, CancellationToken cancellationToken = default)

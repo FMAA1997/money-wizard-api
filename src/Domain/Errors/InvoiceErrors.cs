@@ -25,4 +25,8 @@ public static class InvoiceErrors
     public static readonly Error ParentOccurrenceNotValid = Error.Validation(
         "Invoice.ParentOccurrenceNotValid",
         "The referenced parent occurrence is not a valid issuance of the parent invoice series.");
+
+    public static readonly Error InsertionRequiresNumber = Error.Validation(
+        "Invoice.InsertionRequiresNumber",
+        "An ad-hoc invoice on a non-recurrence date requires a fiscal Number.");
 }

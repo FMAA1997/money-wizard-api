@@ -111,29 +111,45 @@ public sealed class ExpenseService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
 
-        if (!ExpenseSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
-        var segment = ExpenseSeriesExpander.GetSegmentForDate(series, date)!;
-        var occurrenceIndex = segment.RecurrenceRule is null
-            ? 0
-            : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
-
         var existing = await expenseRepository.GetException(series.Id, date, cancellationToken);
+        var isRecurrence = ExpenseSeriesExpander.IsRecurrenceOccurrence(series, date);
+
+        if (!isRecurrence && existing is null)
+        {
+            if (request.Amount is null || string.IsNullOrEmpty(request.Currency))
+                return RecurrenceErrors.InsertionRequiresAmountAndCurrency;
+        }
+
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         ExpenseException exception;
-        if (existing is not null)
+        ExpenseSegment? segment;
+        int occurrenceIndex;
+
+        if (existing is not null && !existing.OriginalDate.HasValue)
+        {
+            existing.Date = date;
+            existing.Amount = request.Amount;
+            existing.Currency = request.Currency;
+            expenseRepository.UpdateException(existing);
+            exception = existing;
+            segment = null;
+            occurrenceIndex = -1;
+        }
+        else if (existing is not null)
         {
             existing.Date = request.Date;
             existing.Amount = request.Amount;
             existing.Currency = request.Currency;
             existing.IsDeleted = false;
-
             expenseRepository.UpdateException(existing);
             exception = existing;
+            segment = ExpenseSeriesExpander.GetSegmentForDate(series, date)!;
+            occurrenceIndex = segment.RecurrenceRule is null
+                ? 0
+                : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
         }
-        else
+        else if (isRecurrence)
         {
             exception = new ExpenseException
             {
@@ -145,13 +161,32 @@ public sealed class ExpenseService(
                 IsDeleted = false
             };
             await expenseRepository.AddException(exception, cancellationToken);
+            segment = ExpenseSeriesExpander.GetSegmentForDate(series, date)!;
+            occurrenceIndex = segment.RecurrenceRule is null
+                ? 0
+                : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
+        }
+        else
+        {
+            exception = new ExpenseException
+            {
+                SeriesId = series.Id,
+                OriginalDate = null,
+                Date = date,
+                Amount = request.Amount,
+                Currency = request.Currency,
+                IsDeleted = false
+            };
+            await expenseRepository.AddException(exception, cancellationToken);
+            segment = null;
+            occurrenceIndex = -1;
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         var occurrence = new ExpenseOccurrence(
             Date: exception.Date ?? date,
-            OriginalDate: date,
+            OriginalDate: exception.OriginalDate,
             Segment: segment,
             Exception: exception,
             OccurrenceIndex: occurrenceIndex);
@@ -208,12 +243,13 @@ public sealed class ExpenseService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return ExpenseErrors.NotFound;
 
-        if (!ExpenseSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
         var existing = await expenseRepository.GetException(series.Id, date, cancellationToken);
 
-        if (existing is not null)
+        if (existing is not null && !existing.OriginalDate.HasValue)
+        {
+            expenseRepository.DeleteException(existing);
+        }
+        else if (existing is not null)
         {
             existing.IsDeleted = true;
             existing.Date = null;
@@ -221,7 +257,7 @@ public sealed class ExpenseService(
             existing.Currency = null;
             expenseRepository.UpdateException(existing);
         }
-        else
+        else if (ExpenseSeriesExpander.IsRecurrenceOccurrence(series, date))
         {
             var exception = new ExpenseException
             {
@@ -230,6 +266,10 @@ public sealed class ExpenseService(
                 IsDeleted = true
             };
             await expenseRepository.AddException(exception, cancellationToken);
+        }
+        else
+        {
+            return ExpenseErrors.NotFound;
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -428,11 +468,13 @@ public sealed class ExpenseService(
 
     private static ExpenseResponse MapOccurrence(ExpenseOccurrence occurrence, ExpenseSeries series, CurrencyScope scope)
     {
-        var segment = occurrence.Segment!;
-        var amount = occurrence.Exception?.Amount ?? segment.Amount;
-        var currency = occurrence.Exception?.Currency ?? segment.Currency;
+        var segment = occurrence.Segment;
+        var amount = occurrence.Exception?.Amount ?? segment!.Amount;
+        var currency = occurrence.Exception?.Currency ?? segment!.Currency;
         var date = occurrence.Date;
-        var hasInstallments = segment.RecurrenceRule?.TotalInstallments is not null;
+        var rule = segment?.RecurrenceRule;
+        var hasInstallments = rule?.TotalInstallments is not null;
+        var isOverride = occurrence.Exception is not null && occurrence.OriginalDate.HasValue;
 
         return new ExpenseResponse(
             Id: occurrence.Exception?.Id ?? series.Id,
@@ -442,21 +484,21 @@ public sealed class ExpenseService(
             Amounts: scope.ConvertToDisplay(amount, currency, date),
             Description: series.Description,
             CategoryId: series.CategoryId,
-            PaycheckSeriesId: segment.PaycheckSeriesId,
-            InvoiceSeriesId: segment.InvoiceSeriesId,
-            IsRecurring: segment.RecurrenceRule is not null,
-            RecurringExpenseId: segment.RecurrenceRule is not null ? series.Id : null,
-            OriginalDate: occurrence.Exception is null ? null : occurrence.OriginalDate,
-            IsOverride: occurrence.Exception is not null,
-            Recurrence: segment.RecurrenceRule is null
+            PaycheckSeriesId: segment?.PaycheckSeriesId,
+            InvoiceSeriesId: segment?.InvoiceSeriesId,
+            IsRecurring: rule is not null,
+            RecurringExpenseId: rule is not null ? series.Id : null,
+            OriginalDate: isOverride ? occurrence.OriginalDate : null,
+            IsOverride: isOverride,
+            Recurrence: segment is null || rule is null
                 ? null
                 : new RecurrenceInfo(
                     segment.EffectiveFrom,
-                    segment.RecurrenceRule.Frequency,
-                    segment.RecurrenceRule.Interval,
-                    segment.RecurrenceRule.EndDate,
-                    segment.RecurrenceRule.TotalInstallments),
+                    rule.Frequency,
+                    rule.Interval,
+                    rule.EndDate,
+                    rule.TotalInstallments),
             InstallmentNumber: hasInstallments ? occurrence.OccurrenceIndex + 1 : null,
-            TotalInstallments: segment.RecurrenceRule?.TotalInstallments);
+            TotalInstallments: rule?.TotalInstallments);
     }
 }

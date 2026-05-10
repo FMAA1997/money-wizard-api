@@ -160,17 +160,46 @@ public class PaycheckServiceTests
     }
 
     [Fact]
-    public async Task UpdateOccurrence_InvalidDate_ReturnsError()
+    public async Task UpdateOccurrence_NonRecurrenceDate_CreatesInsertion()
     {
         var series = BuildSeries(
             BuildSegment(new DateOnly(2026, 1, 15), amount: 1000m, monthlyForever: true));
         SetupGetById(series);
+        _paycheckRepositoryMock
+            .Setup(r => r.GetException(series.Id, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PaycheckException?)null);
+
+        PaycheckException? captured = null;
+        _paycheckRepositoryMock
+            .Setup(r => r.AddException(It.IsAny<PaycheckException>(), It.IsAny<CancellationToken>()))
+            .Callback<PaycheckException, CancellationToken>((e, _) => captured = e);
 
         var request = new UpdatePaycheckOccurrenceRequest(null, 1500m, "USD");
         var result = await _sut.UpdateOccurrence(series.Id, new DateOnly(2026, 3, 16), request);
 
+        result.IsError.Should().BeFalse();
+        captured.Should().NotBeNull();
+        captured!.OriginalDate.Should().BeNull();
+        captured.Date.Should().Be(new DateOnly(2026, 3, 16));
+        captured.Amount.Should().Be(1500m);
+        captured.Currency.Should().Be("USD");
+    }
+
+    [Fact]
+    public async Task UpdateOccurrence_NonRecurrenceDateMissingAmount_ReturnsError()
+    {
+        var series = BuildSeries(
+            BuildSegment(new DateOnly(2026, 1, 15), amount: 1000m, monthlyForever: true));
+        SetupGetById(series);
+        _paycheckRepositoryMock
+            .Setup(r => r.GetException(series.Id, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PaycheckException?)null);
+
+        var request = new UpdatePaycheckOccurrenceRequest(null, null, null);
+        var result = await _sut.UpdateOccurrence(series.Id, new DateOnly(2026, 3, 16), request);
+
         result.IsError.Should().BeTrue();
-        result.FirstError.Should().Be(RecurrenceErrors.InvalidOccurrenceDate);
+        result.FirstError.Should().Be(RecurrenceErrors.InsertionRequiresAmountAndCurrency);
     }
 
     [Fact]

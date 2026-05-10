@@ -13,8 +13,9 @@ public interface IExpenseRepository : IRepository<ExpenseSeries>
 
     Task AddException(ExpenseException exception, CancellationToken cancellationToken = default);
     void UpdateException(ExpenseException exception);
+    void DeleteException(ExpenseException exception);
 
-    Task<ExpenseException?> GetException(Guid seriesId, DateOnly originalDate, CancellationToken cancellationToken = default);
+    Task<ExpenseException?> GetException(Guid seriesId, DateOnly date, CancellationToken cancellationToken = default);
     Task DeleteExceptionsFromDate(Guid seriesId, DateOnly fromDate, CancellationToken cancellationToken = default);
     Task DeleteSegmentsFromDate(Guid seriesId, DateOnly fromDate, CancellationToken cancellationToken = default);
 }

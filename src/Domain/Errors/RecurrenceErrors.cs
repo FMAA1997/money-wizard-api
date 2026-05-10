@@ -18,4 +18,8 @@ public static class RecurrenceErrors
 
     public static readonly Error InvalidDateRange = Error.Validation(
         "Recurrence.InvalidDateRange", "startDate must be before or equal to endDate.");
+
+    public static readonly Error InsertionRequiresAmountAndCurrency = Error.Validation(
+        "Recurrence.InsertionRequiresAmountAndCurrency",
+        "An ad-hoc occurrence on a non-recurrence date requires both Amount and Currency.");
 }

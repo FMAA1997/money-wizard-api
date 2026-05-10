@@ -105,30 +105,49 @@ public sealed class PaycheckService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        if (!PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
-        var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
-        var occurrenceIndex = segment.RecurrenceRule is null
-            ? 0
-            : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
-
         var existing = await paycheckRepository.GetException(series.Id, date, cancellationToken);
+        var isRecurrence = PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date);
+
+        if (!isRecurrence && existing is null)
+        {
+            if (request.Amount is null || string.IsNullOrEmpty(request.Currency))
+                return RecurrenceErrors.InsertionRequiresAmountAndCurrency;
+        }
+
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
         PaycheckException exception;
-        if (existing is not null)
+        PaycheckSegment? segment;
+        int occurrenceIndex;
+
+        if (existing is not null && !existing.OriginalDate.HasValue)
         {
+            // Update existing insertion.
+            existing.Date = date;
+            existing.Amount = request.Amount;
+            existing.Currency = request.Currency;
+            paycheckRepository.UpdateException(existing);
+            exception = existing;
+            segment = null;
+            occurrenceIndex = -1;
+        }
+        else if (existing is not null)
+        {
+            // Update existing override.
             existing.Date = request.Date;
             existing.Amount = request.Amount;
             existing.Currency = request.Currency;
             existing.IsDeleted = false;
-
             paycheckRepository.UpdateException(existing);
             exception = existing;
+            segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
+            occurrenceIndex = segment.RecurrenceRule is null
+                ? 0
+                : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
         }
-        else
+        else if (isRecurrence)
         {
+            // Create new override.
             exception = new PaycheckException
             {
                 SeriesId = series.Id,
@@ -139,13 +158,33 @@ public sealed class PaycheckService(
                 IsDeleted = false
             };
             await paycheckRepository.AddException(exception, cancellationToken);
+            segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
+            occurrenceIndex = segment.RecurrenceRule is null
+                ? 0
+                : RecurrenceExpander.GetOccurrenceIndex(segment.EffectiveFrom, segment.RecurrenceRule, date);
+        }
+        else
+        {
+            // Create new insertion.
+            exception = new PaycheckException
+            {
+                SeriesId = series.Id,
+                OriginalDate = null,
+                Date = date,
+                Amount = request.Amount,
+                Currency = request.Currency,
+                IsDeleted = false
+            };
+            await paycheckRepository.AddException(exception, cancellationToken);
+            segment = null;
+            occurrenceIndex = -1;
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         var occurrence = new PaycheckOccurrence(
             Date: exception.Date ?? date,
-            OriginalDate: date,
+            OriginalDate: exception.OriginalDate,
             Segment: segment,
             Exception: exception,
             OccurrenceIndex: occurrenceIndex);
@@ -200,12 +239,13 @@ public sealed class PaycheckService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        if (!PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date))
-            return RecurrenceErrors.InvalidOccurrenceDate;
-
         var existing = await paycheckRepository.GetException(series.Id, date, cancellationToken);
 
-        if (existing is not null)
+        if (existing is not null && !existing.OriginalDate.HasValue)
+        {
+            paycheckRepository.DeleteException(existing);
+        }
+        else if (existing is not null)
         {
             existing.IsDeleted = true;
             existing.Date = null;
@@ -213,7 +253,7 @@ public sealed class PaycheckService(
             existing.Currency = null;
             paycheckRepository.UpdateException(existing);
         }
-        else
+        else if (PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date))
         {
             var exception = new PaycheckException
             {
@@ -222,6 +262,10 @@ public sealed class PaycheckService(
                 IsDeleted = true
             };
             await paycheckRepository.AddException(exception, cancellationToken);
+        }
+        else
+        {
+            return PaycheckErrors.NotFound;
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -391,11 +435,13 @@ public sealed class PaycheckService(
 
     private static PaycheckResponse MapOccurrence(PaycheckOccurrence occurrence, PaycheckSeries series, CurrencyScope scope)
     {
-        var segment = occurrence.Segment!;
-        var amount = occurrence.Exception?.Amount ?? segment.Amount;
-        var currency = occurrence.Exception?.Currency ?? segment.Currency;
+        var segment = occurrence.Segment;
+        var amount = occurrence.Exception?.Amount ?? segment!.Amount;
+        var currency = occurrence.Exception?.Currency ?? segment!.Currency;
         var date = occurrence.Date;
-        var hasInstallments = segment.RecurrenceRule?.TotalInstallments is not null;
+        var rule = segment?.RecurrenceRule;
+        var hasInstallments = rule?.TotalInstallments is not null;
+        var isOverride = occurrence.Exception is not null && occurrence.OriginalDate.HasValue;
 
         return new PaycheckResponse(
             Id: occurrence.Exception?.Id ?? series.Id,
@@ -404,19 +450,19 @@ public sealed class PaycheckService(
             Currency: currency,
             Amounts: scope.ConvertToDisplay(amount, currency, date),
             Description: series.Description,
-            IsRecurring: segment.RecurrenceRule is not null,
-            RecurringPaycheckId: segment.RecurrenceRule is not null ? series.Id : null,
-            OriginalDate: occurrence.Exception is null ? null : occurrence.OriginalDate,
-            IsOverride: occurrence.Exception is not null,
-            Recurrence: segment.RecurrenceRule is null
+            IsRecurring: rule is not null,
+            RecurringPaycheckId: rule is not null ? series.Id : null,
+            OriginalDate: isOverride ? occurrence.OriginalDate : null,
+            IsOverride: isOverride,
+            Recurrence: segment is null || rule is null
                 ? null
                 : new RecurrenceInfo(
                     segment.EffectiveFrom,
-                    segment.RecurrenceRule.Frequency,
-                    segment.RecurrenceRule.Interval,
-                    segment.RecurrenceRule.EndDate,
-                    segment.RecurrenceRule.TotalInstallments),
+                    rule.Frequency,
+                    rule.Interval,
+                    rule.EndDate,
+                    rule.TotalInstallments),
             InstallmentNumber: hasInstallments ? occurrence.OccurrenceIndex + 1 : null,
-            TotalInstallments: segment.RecurrenceRule?.TotalInstallments);
+            TotalInstallments: rule?.TotalInstallments);
     }
 }
