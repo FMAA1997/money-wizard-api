@@ -145,7 +145,7 @@ public sealed class InvoiceService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        if (!InvoiceSeriesExpander.IsValidOccurrence(series, date))
+        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
         var existing = await invoiceRepository.GetException(series.Id, date, cancellationToken);
@@ -197,7 +197,7 @@ public sealed class InvoiceService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        if (!InvoiceSeriesExpander.IsValidOccurrence(series, date))
+        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
         if (request.Recurrence is not null)
@@ -238,7 +238,7 @@ public sealed class InvoiceService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        if (!InvoiceSeriesExpander.IsValidOccurrence(series, date))
+        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
         var existing = await invoiceRepository.GetException(series.Id, date, cancellationToken);
@@ -273,7 +273,7 @@ public sealed class InvoiceService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return InvoiceErrors.NotFound;
 
-        if (!InvoiceSeriesExpander.IsValidOccurrence(series, date))
+        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
         var segment = InvoiceSeriesExpander.GetSegmentForDate(series, date)!;
@@ -393,7 +393,7 @@ public sealed class InvoiceService(
         if (parent.Type != InvoiceType.Invoice)
             return InvoiceErrors.ParentMustBeInvoice;
 
-        if (!InvoiceSeriesExpander.IsValidOccurrence(parent, parentOriginalDate.Value))
+        if (!InvoiceSeriesExpander.IsRecurrenceOccurrence(parent, parentOriginalDate.Value))
             return InvoiceErrors.ParentOccurrenceNotValid;
 
         var existing = await invoiceRepository.GetException(parent.Id, parentOriginalDate.Value, cancellationToken);
@@ -518,14 +518,14 @@ public sealed class InvoiceService(
 
     private static InvoiceResponse MapOccurrence(InvoiceOccurrence occurrence, InvoiceSeries series, CurrencyScope scope)
     {
-        var segment = occurrence.Segment;
+        var segment = occurrence.Segment!;
         var amount = occurrence.Exception?.Amount ?? segment.Amount;
         var currency = occurrence.Exception?.Currency ?? segment.Currency;
         var date = occurrence.Date;
         var hasInstallments = segment.RecurrenceRule?.TotalInstallments is not null;
 
         return new InvoiceResponse(
-            Id: occurrence.Exception?.Id ?? BuildOccurrenceId(series.Id, occurrence.OriginalDate),
+            Id: occurrence.Exception?.Id ?? BuildOccurrenceId(series.Id, occurrence.OriginalDate!.Value),
             Date: date,
             Amount: amount,
             Currency: currency,

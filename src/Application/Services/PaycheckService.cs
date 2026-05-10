@@ -105,7 +105,7 @@ public sealed class PaycheckService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        if (!PaycheckSeriesExpander.IsValidOccurrence(series, date))
+        if (!PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
         var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
@@ -160,7 +160,7 @@ public sealed class PaycheckService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        if (!PaycheckSeriesExpander.IsValidOccurrence(series, date))
+        if (!PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
         if (request.Recurrence is not null)
@@ -200,7 +200,7 @@ public sealed class PaycheckService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        if (!PaycheckSeriesExpander.IsValidOccurrence(series, date))
+        if (!PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
         var existing = await paycheckRepository.GetException(series.Id, date, cancellationToken);
@@ -234,7 +234,7 @@ public sealed class PaycheckService(
         if (series is null || series.UserId != currentUserProvider.UserId)
             return PaycheckErrors.NotFound;
 
-        if (!PaycheckSeriesExpander.IsValidOccurrence(series, date))
+        if (!PaycheckSeriesExpander.IsRecurrenceOccurrence(series, date))
             return RecurrenceErrors.InvalidOccurrenceDate;
 
         var segment = PaycheckSeriesExpander.GetSegmentForDate(series, date)!;
@@ -391,7 +391,7 @@ public sealed class PaycheckService(
 
     private static PaycheckResponse MapOccurrence(PaycheckOccurrence occurrence, PaycheckSeries series, CurrencyScope scope)
     {
-        var segment = occurrence.Segment;
+        var segment = occurrence.Segment!;
         var amount = occurrence.Exception?.Amount ?? segment.Amount;
         var currency = occurrence.Exception?.Currency ?? segment.Currency;
         var date = occurrence.Date;

@@ -4,8 +4,8 @@ namespace Domain.Services;
 
 public sealed record InvoiceOccurrence(
     DateOnly Date,
-    DateOnly OriginalDate,
-    InvoiceSegment Segment,
+    DateOnly? OriginalDate,
+    InvoiceSegment? Segment,
     InvoiceException? Exception,
     int OccurrenceIndex,
     int GlobalIndex,
@@ -19,7 +19,7 @@ public static class InvoiceSeriesExpander
         DateOnly rangeEnd)
     {
         var segments = series.Segments.OrderBy(s => s.EffectiveFrom).ToList();
-        var exceptions = series.Exceptions
+        var overrides = series.Exceptions
             .Where(e => e.OriginalDate.HasValue)
             .ToDictionary(e => e.OriginalDate!.Value);
         var results = new List<InvoiceOccurrence>();
@@ -35,7 +35,7 @@ public static class InvoiceSeriesExpander
                 if (segment.EffectiveFrom <= segmentEnd)
                 {
                     if (segment.EffectiveFrom >= rangeStart && segment.EffectiveFrom <= rangeEnd)
-                        AddOccurrence(results, segment.EffectiveFrom, segment, exceptions, 0, globalIndex, series.BaseNumber);
+                        AddOverrideOrGenerated(results, segment.EffectiveFrom, segment, overrides, 0, globalIndex, series.BaseNumber);
                     globalIndex++;
                 }
             }
@@ -46,16 +46,33 @@ public static class InvoiceSeriesExpander
                     segment.EffectiveFrom, segment.RecurrenceRule, segment.EffectiveFrom, expansionEnd))
                 {
                     if (date >= rangeStart && date <= rangeEnd)
-                        AddOccurrence(results, date, segment, exceptions, idx, globalIndex, series.BaseNumber);
+                        AddOverrideOrGenerated(results, date, segment, overrides, idx, globalIndex, series.BaseNumber);
                     globalIndex++;
                 }
             }
         }
 
+        foreach (var insertion in series.Exceptions)
+        {
+            if (insertion.OriginalDate.HasValue) continue;
+            if (insertion.Date is not { } date) continue;
+            if (date < rangeStart || date > rangeEnd) continue;
+
+            results.Add(new InvoiceOccurrence(
+                Date: date,
+                OriginalDate: null,
+                Segment: null,
+                Exception: insertion,
+                OccurrenceIndex: -1,
+                GlobalIndex: -1,
+                Number: insertion.Number));
+        }
+
+        results.Sort((a, b) => a.Date.CompareTo(b.Date));
         return results;
     }
 
-    public static bool IsValidOccurrence(InvoiceSeries series, DateOnly date)
+    public static bool IsRecurrenceOccurrence(InvoiceSeries series, DateOnly date)
     {
         var segment = GetSegmentForDate(series, date);
         if (segment is null)
@@ -72,6 +89,10 @@ public static class InvoiceSeriesExpander
 
         return RecurrenceExpander.IsValidOccurrence(segment.EffectiveFrom, segment.RecurrenceRule, date);
     }
+
+    public static bool IsExistingOccurrence(InvoiceSeries series, DateOnly date) =>
+        IsRecurrenceOccurrence(series, date)
+        || series.Exceptions.Any(e => !e.OriginalDate.HasValue && e.Date == date);
 
     public static InvoiceSegment? GetSegmentForDate(InvoiceSeries series, DateOnly date)
     {
@@ -100,8 +121,8 @@ public static class InvoiceSeriesExpander
     }
 
     /// <summary>
-    /// Returns the global occurrence index for a specific date within the series, or -1 if not a valid occurrence.
-    /// Used by the parent-materialization flow to freeze a Number on the materialized exception.
+    /// Returns the global occurrence index for a specific recurrence-generated date, or -1 if not a recurrence occurrence.
+    /// Insertions never affect this index.
     /// </summary>
     public static int GetGlobalOccurrenceIndex(InvoiceSeries series, DateOnly date)
     {
@@ -143,16 +164,16 @@ public static class InvoiceSeriesExpander
         return nextBoundary < ruleEnd ? nextBoundary : ruleEnd;
     }
 
-    private static void AddOccurrence(
+    private static void AddOverrideOrGenerated(
         List<InvoiceOccurrence> results,
         DateOnly originalDate,
         InvoiceSegment segment,
-        Dictionary<DateOnly, InvoiceException> exceptions,
+        Dictionary<DateOnly, InvoiceException> overrides,
         int occurrenceIndex,
         int globalIndex,
         long? baseNumber)
     {
-        if (exceptions.TryGetValue(originalDate, out var exception))
+        if (overrides.TryGetValue(originalDate, out var exception))
         {
             if (exception.IsDeleted)
                 return;

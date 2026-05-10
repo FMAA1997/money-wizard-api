@@ -258,8 +258,8 @@ public sealed class InvestmentStatisticsService(
         {
             foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 totals.Add(amount, currency, occurrence.Date);
                 if (earliest is null || occurrence.Date < earliest)
                     earliest = occurrence.Date;
@@ -281,8 +281,8 @@ public sealed class InvestmentStatisticsService(
         {
             foreach (var occurrence in PaycheckSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 totals.Add(amount, currency, occurrence.Date);
                 if (earliest is null || occurrence.Date < earliest)
                     earliest = occurrence.Date;
@@ -305,8 +305,8 @@ public sealed class InvestmentStatisticsService(
             var sign = SignOf(series.Type);
             foreach (var occurrence in InvoiceSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 totals.Add(sign * amount, currency, occurrence.Date);
                 if (earliest is null || occurrence.Date < earliest)
                     earliest = occurrence.Date;

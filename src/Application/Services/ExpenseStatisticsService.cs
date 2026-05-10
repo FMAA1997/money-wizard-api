@@ -91,8 +91,8 @@ public sealed class ExpenseStatisticsService(
             if (earliestDate is null || first.Date < earliestDate)
             {
                 earliestDate = first.Date;
-                earliestAmount = first.Exception?.Amount ?? first.Segment.Amount;
-                earliestCurrency = first.Exception?.Currency ?? first.Segment.Currency;
+                earliestAmount = first.Exception?.Amount ?? first.Segment!.Amount;
+                earliestCurrency = first.Exception?.Currency ?? first.Segment!.Currency;
                 earliestDescription = series.Description;
             }
         }
@@ -345,8 +345,8 @@ public sealed class ExpenseStatisticsService(
         {
             foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 var month = occurrence.Date.Month;
                 monthly[month] = monthly.GetValueOrDefault(month) + scope.ConvertToPrimary(amount, currency, occurrence.Date);
             }
@@ -362,8 +362,8 @@ public sealed class ExpenseStatisticsService(
         {
             foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 total += scope.ConvertToPrimary(amount, currency, occurrence.Date);
             }
         }
@@ -383,8 +383,8 @@ public sealed class ExpenseStatisticsService(
 
             foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 yield return (occurrence.Date, scope.ConvertToPrimary(amount, currency, occurrence.Date), categoryName, categoryColor);
             }
         }
@@ -404,10 +404,10 @@ public sealed class ExpenseStatisticsService(
 
             foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
-                var source = occurrence.Segment.PaycheckSeries?.Description
-                    ?? occurrence.Segment.InvoiceSeries?.Description
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
+                var source = occurrence.Segment?.PaycheckSeries?.Description
+                    ?? occurrence.Segment?.InvoiceSeries?.Description
                     ?? otherSource;
 
                 yield return (

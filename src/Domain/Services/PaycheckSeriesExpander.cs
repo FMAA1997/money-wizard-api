@@ -4,8 +4,8 @@ namespace Domain.Services;
 
 public sealed record PaycheckOccurrence(
     DateOnly Date,
-    DateOnly OriginalDate,
-    PaycheckSegment Segment,
+    DateOnly? OriginalDate,
+    PaycheckSegment? Segment,
     PaycheckException? Exception,
     int OccurrenceIndex);
 
@@ -17,7 +17,7 @@ public static class PaycheckSeriesExpander
         DateOnly rangeEnd)
     {
         var segments = series.Segments.OrderBy(s => s.EffectiveFrom).ToList();
-        var exceptions = series.Exceptions
+        var overrides = series.Exceptions
             .Where(e => e.OriginalDate.HasValue)
             .ToDictionary(e => e.OriginalDate!.Value);
         var results = new List<PaycheckOccurrence>();
@@ -35,22 +35,37 @@ public static class PaycheckSeriesExpander
             if (segment.RecurrenceRule is null)
             {
                 if (segment.EffectiveFrom >= windowStart && segment.EffectiveFrom <= windowEnd)
-                    AddOccurrence(results, segment.EffectiveFrom, segment, exceptions, occurrenceIndex: 0);
+                    AddOverrideOrGenerated(results, segment.EffectiveFrom, segment, overrides, occurrenceIndex: 0);
             }
             else
             {
                 foreach (var (date, idx) in RecurrenceExpander.Expand(
                     segment.EffectiveFrom, segment.RecurrenceRule, windowStart, windowEnd))
                 {
-                    AddOccurrence(results, date, segment, exceptions, idx);
+                    AddOverrideOrGenerated(results, date, segment, overrides, idx);
                 }
             }
         }
 
+        foreach (var insertion in series.Exceptions)
+        {
+            if (insertion.OriginalDate.HasValue) continue;
+            if (insertion.Date is not { } date) continue;
+            if (date < rangeStart || date > rangeEnd) continue;
+
+            results.Add(new PaycheckOccurrence(
+                Date: date,
+                OriginalDate: null,
+                Segment: null,
+                Exception: insertion,
+                OccurrenceIndex: -1));
+        }
+
+        results.Sort((a, b) => a.Date.CompareTo(b.Date));
         return results;
     }
 
-    public static bool IsValidOccurrence(PaycheckSeries series, DateOnly date)
+    public static bool IsRecurrenceOccurrence(PaycheckSeries series, DateOnly date)
     {
         var segment = GetSegmentForDate(series, date);
         if (segment is null)
@@ -67,6 +82,10 @@ public static class PaycheckSeriesExpander
 
         return RecurrenceExpander.IsValidOccurrence(segment.EffectiveFrom, segment.RecurrenceRule, date);
     }
+
+    public static bool IsExistingOccurrence(PaycheckSeries series, DateOnly date) =>
+        IsRecurrenceOccurrence(series, date)
+        || series.Exceptions.Any(e => !e.OriginalDate.HasValue && e.Date == date);
 
     public static PaycheckSegment? GetSegmentForDate(PaycheckSeries series, DateOnly date)
     {
@@ -103,14 +122,14 @@ public static class PaycheckSeriesExpander
         return nextBoundary < ruleEnd ? nextBoundary : ruleEnd;
     }
 
-    private static void AddOccurrence(
+    private static void AddOverrideOrGenerated(
         List<PaycheckOccurrence> results,
         DateOnly originalDate,
         PaycheckSegment segment,
-        Dictionary<DateOnly, PaycheckException> exceptions,
+        Dictionary<DateOnly, PaycheckException> overrides,
         int occurrenceIndex)
     {
-        if (exceptions.TryGetValue(originalDate, out var exception))
+        if (overrides.TryGetValue(originalDate, out var exception))
         {
             if (exception.IsDeleted)
                 return;

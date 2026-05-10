@@ -55,12 +55,12 @@ public sealed class DashboardService(
             var categoryColor = series.Category?.Color ?? UncategorizedColor;
             categoryColors[categoryName] = categoryColor;
 
-            if (segment.InvoiceSeriesId is { } invoiceId && invoiceMeta.ContainsKey(invoiceId))
+            if (segment?.InvoiceSeriesId is { } invoiceId && invoiceMeta.ContainsKey(invoiceId))
             {
                 var key = (invoiceId, categoryName);
                 invoiceCategoryFlows[key] = invoiceCategoryFlows.GetValueOrDefault(key) + amount;
             }
-            else if (segment.PaycheckSeriesId is { } paycheckId && paycheckMeta.ContainsKey(paycheckId))
+            else if (segment?.PaycheckSeriesId is { } paycheckId && paycheckMeta.ContainsKey(paycheckId))
             {
                 paycheckToOtherInvoice[paycheckId] = paycheckToOtherInvoice.GetValueOrDefault(paycheckId) + amount;
                 paycheckOtherInvoiceToCategory[categoryName] = paycheckOtherInvoiceToCategory.GetValueOrDefault(categoryName) + amount;
@@ -191,8 +191,8 @@ public sealed class DashboardService(
         {
             foreach (var occurrence in PaycheckSeriesExpander.Expand(series, from, to))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 totals.Add(amount, currency, occurrence.Date);
             }
         }
@@ -206,8 +206,8 @@ public sealed class DashboardService(
         {
             foreach (var occurrence in ExpenseSeriesExpander.Expand(series, from, to))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 totals.Add(amount, currency, occurrence.Date);
             }
         }
@@ -222,8 +222,8 @@ public sealed class DashboardService(
             var sign = Sign(series.Type);
             foreach (var occurrence in InvoiceSeriesExpander.Expand(series, from, to))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 totals.Add(sign * amount, currency, occurrence.Date);
             }
         }
@@ -387,8 +387,8 @@ public sealed class DashboardService(
         {
             foreach (var occurrence in PaycheckSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 totals[series.Id] = totals.GetValueOrDefault(series.Id) + scope.ConvertToPrimary(amount, currency, occurrence.Date);
             }
         }
@@ -407,8 +407,8 @@ public sealed class DashboardService(
             var sign = Sign(series.Type);
             foreach (var occurrence in InvoiceSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 totals[series.Id] = totals.GetValueOrDefault(series.Id) + sign * scope.ConvertToPrimary(amount, currency, occurrence.Date);
             }
 
@@ -419,15 +419,15 @@ public sealed class DashboardService(
         return (totals, sources);
     }
 
-    private static IEnumerable<(DateOnly Date, decimal Amount, ExpenseSeries Series, ExpenseSegment Segment)> ExpandExpenseOccurrences(
+    private static IEnumerable<(DateOnly Date, decimal Amount, ExpenseSeries Series, ExpenseSegment? Segment)> ExpandExpenseOccurrences(
         IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
         foreach (var series in seriesList)
         {
             foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 yield return (occurrence.Date, scope.ConvertToPrimary(amount, currency, occurrence.Date), series, occurrence.Segment);
             }
         }

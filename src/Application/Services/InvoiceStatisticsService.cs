@@ -86,8 +86,8 @@ public sealed class InvoiceStatisticsService(
             var sign = Sign(series.Type);
             foreach (var occurrence in InvoiceSeriesExpander.Expand(series, startDate, endDate))
             {
-                var amount = occurrence.Exception?.Amount ?? occurrence.Segment.Amount;
-                var currency = occurrence.Exception?.Currency ?? occurrence.Segment.Currency;
+                var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
+                var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 total += sign * scope.Convert(amount, currency, "ARS", occurrence.Date);
             }
         }
