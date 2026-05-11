@@ -7,7 +7,7 @@ namespace Application.Services.Investments;
 
 public sealed class InvestmentYieldCalculator : IInvestmentYieldCalculator
 {
-    private static readonly IReadOnlyDictionary<AssetClass, decimal> DefaultYieldsPct = new Dictionary<AssetClass, decimal>
+    private static readonly IReadOnlyDictionary<AssetClass, decimal> _defaultYieldsPct = new Dictionary<AssetClass, decimal>
     {
         [AssetClass.Stock] = 7m,
         [AssetClass.Etf] = 7m,
@@ -16,6 +16,8 @@ public sealed class InvestmentYieldCalculator : IInvestmentYieldCalculator
         [AssetClass.Crypto] = 15m,
         [AssetClass.Fci] = 6m,
     };
+
+    private const decimal _usInflationPct = 3.75m;
 
     public IReadOnlyDictionary<string, decimal> ComputeAnnualYield(
         IReadOnlyList<InvestmentDetailResponse> valuations,
@@ -28,9 +30,11 @@ public sealed class InvestmentYieldCalculator : IInvestmentYieldCalculator
             if (inv.CurrentValue is null)
                 continue;
 
-            var rate = (inv.ManualYield ?? DefaultYieldsPct.GetValueOrDefault(inv.AssetClass)) / 100m;
-            if (rate == 0m)
+            var nominalPct = inv.ManualYield ?? _defaultYieldsPct.GetValueOrDefault(inv.AssetClass);
+            if (nominalPct == 0m)
                 continue;
+
+            var rate = (nominalPct - _usInflationPct) / 100m;
 
             foreach (var (currency, value) in inv.CurrentValue)
             {

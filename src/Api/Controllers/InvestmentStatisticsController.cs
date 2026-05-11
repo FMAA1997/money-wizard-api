@@ -24,4 +24,12 @@ public sealed class InvestmentStatisticsController(IInvestmentStatisticsService 
     [HttpGet("financial-independence")]
     public async Task<ActionResult<FinancialIndependence>> GetFinancialIndependence(CancellationToken cancellationToken) =>
         MatchOk(await investmentStatisticsService.GetFinancialIndependence(cancellationToken));
+
+    [HttpGet("savings-rate")]
+    public async Task<ActionResult<SavingsRate>> GetSavingsRate(CancellationToken cancellationToken) =>
+        MatchOk(await investmentStatisticsService.GetSavingsRate(cancellationToken));
+
+    [HttpGet("expenses-covered-by-yield")]
+    public async Task<ActionResult<ExpensesCoveredByYield>> GetExpensesCoveredByYield(CancellationToken cancellationToken) =>
+        MatchOk(await investmentStatisticsService.GetExpensesCoveredByYield(cancellationToken));
 }

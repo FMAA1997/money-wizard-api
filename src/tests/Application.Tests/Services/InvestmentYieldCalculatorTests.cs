@@ -41,7 +41,7 @@ public class InvestmentYieldCalculatorTests
             new[] { MakeValuation(AssetClass.Stock, new Dictionary<string, decimal> { ["USD"] = 1000m }, manualYield: 10m) },
             scope);
 
-        result["USD"].Should().Be(100m); // 1000 * 10%
+        result["USD"].Should().Be(62.5m); // 1000 * (10% - 3.75% US inflation)
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class InvestmentYieldCalculatorTests
             new[] { MakeValuation(AssetClass.Bond, new Dictionary<string, decimal> { ["USD"] = 1000m }, manualYield: null) },
             scope);
 
-        result["USD"].Should().Be(40m); // 1000 * 4% (Bond default)
+        result["USD"].Should().Be(2.5m); // 1000 * (4% Bond default - 3.75% US inflation)
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class InvestmentYieldCalculatorTests
             },
             scope);
 
-        result["USD"].Should().Be(50m);
-        result["ARS"].Should().Be(50_000m);
+        result["USD"].Should().Be(12.5m); // 1000 * (5% - 3.75%)
+        result["ARS"].Should().Be(12_500m); // 1_000_000 * (5% - 3.75%)
     }
 }

@@ -180,6 +180,100 @@ public sealed class InvestmentStatisticsService(
             Months: months);
     }
 
+    public async Task<ErrorOr<SavingsRate>> GetSavingsRate(CancellationToken cancellationToken = default)
+    {
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
+        var (ttmStart, ttmEnd, today) = TtmWindow();
+        var userId = currentUserProvider.UserId;
+
+        var expenses = await expenseRepository.GetByUserIdInRange(userId, ttmStart, ttmEnd, cancellationToken);
+        var paychecks = await paycheckRepository.GetByUserIdInRange(userId, ttmStart, ttmEnd, cancellationToken);
+
+        var ttmExpenseTotals = scope.NewTotals();
+        var ttmPaycheckTotals = scope.NewTotals();
+        var earliestExpense = AccumulateExpenses(expenses, ttmStart, ttmEnd, ttmExpenseTotals);
+        var earliestPaycheck = AccumulatePaychecks(paychecks, ttmStart, ttmEnd, ttmPaycheckTotals);
+        var earliest = Earliest(earliestExpense, earliestPaycheck);
+        var months = earliest is null ? 0 : Math.Min(12, MonthsBetween(earliest.Value, today));
+
+        var monthStart = new DateOnly(today.Year, today.Month, 1);
+        var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+        var curExpenseTotals = scope.NewTotals();
+        var curPaycheckTotals = scope.NewTotals();
+        AccumulateExpenses(expenses, monthStart, monthEnd, curExpenseTotals);
+        AccumulatePaychecks(paychecks, monthStart, monthEnd, curPaycheckTotals);
+
+        var ttm = BuildSavingsSnapshot(scope, monthsDivisor: months,
+            income: ttmPaycheckTotals.ToDictionary(),
+            expenses: ttmExpenseTotals.ToDictionary());
+        var cur = BuildSavingsSnapshot(scope, monthsDivisor: 1,
+            income: curPaycheckTotals.ToDictionary(),
+            expenses: curExpenseTotals.ToDictionary());
+
+        var savingsDiff = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => cur.Savings[c] - ttm.Savings[c]);
+
+        var rateDiff = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => (cur.SavingsRatePct[c], ttm.SavingsRatePct[c]) switch
+            {
+                (decimal a, decimal b) => (decimal?)(a - b),
+                _ => null,
+            });
+
+        return new SavingsRate(cur, ttm, savingsDiff, rateDiff, months);
+    }
+
+    public async Task<ErrorOr<ExpensesCoveredByYield>> GetExpensesCoveredByYield(CancellationToken cancellationToken = default)
+    {
+        var valuationsResult = await investmentService.GetAll(cancellationToken);
+        if (valuationsResult.IsError)
+            return valuationsResult.Errors;
+
+        var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
+        var annualYield = yieldCalculator.ComputeAnnualYield(valuationsResult.Value, scope);
+
+        var (ttmStart, ttmEnd, today) = TtmWindow();
+        var expenses = await expenseRepository.GetByUserIdInRange(
+            currentUserProvider.UserId, ttmStart, ttmEnd, cancellationToken);
+
+        var totals = scope.NewTotals();
+        var earliest = AccumulateExpenses(expenses, ttmStart, ttmEnd, totals);
+        var months = earliest is null ? 0 : Math.Min(12, MonthsBetween(earliest.Value, today));
+        var annualizationFactor = months == 0 ? 0m : 12m / months;
+
+        var ttmExpenses = totals.ToDictionary();
+        var annualExpenses = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => ttmExpenses[c] * annualizationFactor);
+
+        var coverage = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => annualExpenses[c] == 0m
+                ? (decimal?)null
+                : annualYield.GetValueOrDefault(c) / annualExpenses[c]);
+
+        return new ExpensesCoveredByYield(annualYield, annualExpenses, coverage, months);
+    }
+
+    private static SavingsRateSnapshot BuildSavingsSnapshot(
+        CurrencyScope scope,
+        int monthsDivisor,
+        IReadOnlyDictionary<string, decimal> income,
+        IReadOnlyDictionary<string, decimal> expenses)
+    {
+        var inc = scope.DisplayCurrencies.ToDictionary(
+            c => c, c => monthsDivisor == 0 ? 0m : income[c] / monthsDivisor);
+        var exp = scope.DisplayCurrencies.ToDictionary(
+            c => c, c => monthsDivisor == 0 ? 0m : expenses[c] / monthsDivisor);
+        var sav = scope.DisplayCurrencies.ToDictionary(
+            c => c, c => inc[c] - exp[c]);
+        var ratePct = scope.DisplayCurrencies.ToDictionary(
+            c => c, c => inc[c] == 0m ? (decimal?)null : 100m * sav[c] / inc[c]);
+        return new SavingsRateSnapshot(inc, exp, sav, ratePct);
+    }
+
     private static FinancialIndependenceMilestone BuildMilestone(
         IReadOnlyDictionary<string, decimal> annualYield,
         IReadOnlyDictionary<string, decimal> totalInvested,
