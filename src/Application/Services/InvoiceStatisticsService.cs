@@ -18,6 +18,8 @@ public sealed class InvoiceStatisticsService(
     ICurrentUserProvider currentUserProvider,
     ICurrencyConverter currencyConverter) : IInvoiceStatisticsService
 {
+    private const string ThresholdCurrency = "ARS";
+
     public async Task<ErrorOr<InvoiceCategoryProgress>> GetCategoryProgress(CancellationToken cancellationToken = default)
     {
         var user = await userRepository.GetById(currentUserProvider.UserId, cancellationToken);
@@ -44,20 +46,31 @@ public sealed class InvoiceStatisticsService(
 
         var invoicedEnd = today < periodEnd ? today : periodEnd;
         var invoicedAmount = invoicedEnd >= periodStart
-            ? SumExpandedAmountsInArs(invoices, periodStart, invoicedEnd, scope)
-            : 0m;
-        var projectedAmount = SumExpandedAmountsInArs(invoices, periodStart, periodEnd, scope);
+            ? SumExpandedAmounts(invoices, periodStart, invoicedEnd, scope)
+            : scope.DisplayCurrencies.ToDictionary(c => c, _ => 0m);
+        var projectedAmount = SumExpandedAmounts(invoices, periodStart, periodEnd, scope);
 
-        var invoicedPercentage = category.Top != 0 ? invoicedAmount / category.Top * 100 : 0;
-        var projectedPercentage = category.Top != 0 ? projectedAmount / category.Top * 100 : 0;
+        var categoryBottom = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => scope.Convert(category.Bottom, ThresholdCurrency, c, today));
+        var categoryTop = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => scope.Convert(category.Top, ThresholdCurrency, c, today));
+
+        var invoicedPercentage = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => categoryTop[c] != 0 ? invoicedAmount[c] / categoryTop[c] * 100 : 0m);
+        var projectedPercentage = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => categoryTop[c] != 0 ? projectedAmount[c] / categoryTop[c] * 100 : 0m);
 
         return new InvoiceCategoryProgress(
             category.Id,
             category.Name,
             periodStart,
             periodEnd,
-            category.Bottom,
-            category.Top,
+            categoryBottom,
+            categoryTop,
             invoicedAmount,
             projectedAmount,
             invoicedPercentage,
@@ -78,9 +91,10 @@ public sealed class InvoiceStatisticsService(
         return new DateOnly(year, month, Math.Min(day, maxDay));
     }
 
-    private static decimal SumExpandedAmountsInArs(IReadOnlyList<InvoiceSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+    private static IReadOnlyDictionary<string, decimal> SumExpandedAmounts(
+        IReadOnlyList<InvoiceSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
-        decimal total = 0;
+        var totals = scope.NewTotals();
         foreach (var series in seriesList)
         {
             var sign = Sign(series.Type);
@@ -88,10 +102,10 @@ public sealed class InvoiceStatisticsService(
             {
                 var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
                 var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
-                total += sign * scope.Convert(amount, currency, "ARS", occurrence.Date);
+                totals.Add(sign * amount, currency, occurrence.Date);
             }
         }
-        return total;
+        return totals.ToDictionary();
     }
 
     private static decimal Sign(InvoiceType type) =>

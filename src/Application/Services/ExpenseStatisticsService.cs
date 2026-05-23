@@ -28,10 +28,15 @@ public sealed class ExpenseStatisticsService(
         var totalYtd = SumExpandedAmounts(seriesList, currentYearStart, ytdEnd, scope);
         var totalPreviousYear = SumExpandedAmounts(seriesList, previousYearStart, currentYearStart.AddDays(-1), scope);
 
-        var variationYoY = totalCurrentYear - totalPreviousYear;
-        var variationYoyPctg = totalPreviousYear != 0
-            ? (totalCurrentYear - totalPreviousYear) / totalPreviousYear * 100
-            : 0;
+        var variationYoY = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => totalCurrentYear[c] - totalPreviousYear[c]);
+
+        var variationYoyPctg = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => totalPreviousYear[c] != 0
+                ? (totalCurrentYear[c] - totalPreviousYear[c]) / totalPreviousYear[c] * 100
+                : 0m);
 
         return new ExpenseTotals
         {
@@ -52,20 +57,45 @@ public sealed class ExpenseStatisticsService(
         var currentYearMonthly = GetMonthlyAmounts(seriesList, currentYearStart, currentYearEnd, scope);
         var previousYearMonthly = GetMonthlyAmounts(seriesList, previousYearStart, currentYearStart.AddDays(-1), scope);
 
-        var avgMonthlyExpense = currentYearMonthly.Values.Sum() / 12;
-        var previousYearAvgMonthlyExpense = previousYearMonthly.Values.Sum() / 12;
+        var avgMonthlyExpense = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => currentYearMonthly.Values.Sum(m => m[c]) / 12);
+        var previousYearAvgMonthlyExpense = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => previousYearMonthly.Values.Sum(m => m[c]) / 12);
 
-        var maxMonth = currentYearMonthly.Count > 0 ? currentYearMonthly.MaxBy(kv => kv.Value) : default;
-        var minMonth = currentYearMonthly.Count > 0 ? currentYearMonthly.MinBy(kv => kv.Value) : default;
+        var maxMonthlyExpense = new Dictionary<string, decimal>();
+        var minMonthlyExpense = new Dictionary<string, decimal>();
+        var maxMonthlyExpenseMonth = new Dictionary<string, int>();
+        var minMonthlyExpenseMonth = new Dictionary<string, int>();
+
+        foreach (var c in scope.DisplayCurrencies)
+        {
+            if (currentYearMonthly.Count == 0)
+            {
+                maxMonthlyExpense[c] = 0m;
+                minMonthlyExpense[c] = 0m;
+                maxMonthlyExpenseMonth[c] = 0;
+                minMonthlyExpenseMonth[c] = 0;
+                continue;
+            }
+
+            var maxKv = currentYearMonthly.MaxBy(kv => kv.Value[c]);
+            var minKv = currentYearMonthly.MinBy(kv => kv.Value[c]);
+            maxMonthlyExpense[c] = maxKv.Value[c];
+            minMonthlyExpense[c] = minKv.Value[c];
+            maxMonthlyExpenseMonth[c] = maxKv.Key;
+            minMonthlyExpenseMonth[c] = minKv.Key;
+        }
 
         return new MonthlyExpenseStats
         {
             AvgMonthlyExpense = avgMonthlyExpense,
             PreviousYearAvgMonthlyExpense = previousYearAvgMonthlyExpense,
-            MaxMonthlyExpense = maxMonth.Value,
-            MinMonthlyExpense = minMonth.Value,
-            MaxMonthlyExpenseMonth = maxMonth.Key,
-            MinMonthlyExpenseMonth = minMonth.Key
+            MaxMonthlyExpense = maxMonthlyExpense,
+            MinMonthlyExpense = minMonthlyExpense,
+            MaxMonthlyExpenseMonth = maxMonthlyExpenseMonth,
+            MinMonthlyExpenseMonth = minMonthlyExpenseMonth
         };
     }
 
@@ -122,13 +152,18 @@ public sealed class ExpenseStatisticsService(
             currentUserProvider.UserId, currentYearStart, currentYearEnd, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var monthlyByCategory = new Dictionary<(int Month, string Category), decimal>();
+        var monthlyByCategory = new Dictionary<(int Month, string Category), CurrencyTotals>();
         var categoryColors = new Dictionary<string, string>();
 
-        foreach (var (date, amount, categoryName, categoryColor) in ExpandWithCategory(seriesList, currentYearStart, currentYearEnd, scope))
+        foreach (var (date, amount, currency, categoryName, categoryColor) in ExpandWithCategory(seriesList, currentYearStart, currentYearEnd))
         {
             var key = (date.Month, categoryName);
-            monthlyByCategory[key] = monthlyByCategory.GetValueOrDefault(key) + amount;
+            if (!monthlyByCategory.TryGetValue(key, out var totals))
+            {
+                totals = scope.NewTotals();
+                monthlyByCategory[key] = totals;
+            }
+            totals.Add(amount, currency, date);
             categoryColors[categoryName] = categoryColor;
         }
 
@@ -137,20 +172,28 @@ public sealed class ExpenseStatisticsService(
             .OrderBy(c => c.Name)
             .ToList();
 
+        var zeroPerCurrency = scope.DisplayCurrencies.ToDictionary(c => c, _ => 0m);
         var data = new List<Dictionary<string, object>>();
 
         for (var m = 1; m <= 12; m++)
         {
             var monthName = new DateOnly(year, m, 1).ToString("MMM", System.Globalization.CultureInfo.InvariantCulture);
             var row = new Dictionary<string, object> { ["month"] = monthName };
-            decimal total = 0;
+            var rowTotal = scope.NewTotals();
             foreach (var cat in categories)
             {
-                var amount = monthlyByCategory.GetValueOrDefault((m, cat.Name));
-                row[cat.Name] = amount;
-                total += amount;
+                if (monthlyByCategory.TryGetValue((m, cat.Name), out var totals))
+                {
+                    var dict = totals.ToDictionary();
+                    row[cat.Name] = dict;
+                    rowTotal.AddConverted(dict);
+                }
+                else
+                {
+                    row[cat.Name] = zeroPerCurrency;
+                }
             }
-            row["total"] = total;
+            row["total"] = rowTotal.ToDictionary();
             data.Add(row);
         }
 
@@ -169,12 +212,17 @@ public sealed class ExpenseStatisticsService(
             currentUserProvider.UserId, startDate, endDate, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var categoryTotals = new Dictionary<string, decimal>();
+        var categoryTotals = new Dictionary<string, CurrencyTotals>();
         var categoryColors = new Dictionary<string, string>();
 
-        foreach (var (_, amount, categoryName, categoryColor) in ExpandWithCategory(seriesList, startDate, endDate, scope))
+        foreach (var (date, amount, currency, categoryName, categoryColor) in ExpandWithCategory(seriesList, startDate, endDate))
         {
-            categoryTotals[categoryName] = categoryTotals.GetValueOrDefault(categoryName) + amount;
+            if (!categoryTotals.TryGetValue(categoryName, out var totals))
+            {
+                totals = scope.NewTotals();
+                categoryTotals[categoryName] = totals;
+            }
+            totals.Add(amount, currency, date);
             categoryColors[categoryName] = categoryColor;
         }
 
@@ -182,10 +230,10 @@ public sealed class ExpenseStatisticsService(
             .Select(kv => new CategoryDistributionEntry
             {
                 Name = kv.Key,
-                Value = kv.Value,
+                Value = kv.Value.ToDictionary(),
                 Fill = categoryColors[kv.Key]
             })
-            .OrderByDescending(e => e.Value)
+            .OrderByDescending(e => e.Value.GetValueOrDefault(scope.PrimaryCurrency))
             .ToList();
 
         return new CategoryDistribution { Data = data };
@@ -213,20 +261,33 @@ public sealed class ExpenseStatisticsService(
             currentUserProvider.UserId, startDate, endDate, cancellationToken);
         var scope = await currencyConverter.OpenScopeAsync(cancellationToken);
 
-        var tripleTotals = new Dictionary<(string Source, string Category, string Description), decimal>();
+        var sourceCategoryTotals = new Dictionary<(string Source, string Category), CurrencyTotals>();
+        var categoryExpenseTotals = new Dictionary<(string Category, string Description), CurrencyTotals>();
         var categoryColors = new Dictionary<string, string>();
         var sources = new HashSet<string>();
         var categories = new HashSet<string>();
-        var expenseKeys = new HashSet<(string Category, string Description)>();
 
-        foreach (var (_, amount, sourceName, categoryName, categoryColor, description) in ExpandWithSourceCategoryAndDescription(seriesList, startDate, endDate, scope))
+        foreach (var (date, amount, currency, sourceName, categoryName, categoryColor, description) in ExpandWithSourceCategoryAndDescription(seriesList, startDate, endDate))
         {
-            var key = (sourceName, categoryName, description);
-            tripleTotals[key] = tripleTotals.GetValueOrDefault(key) + amount;
+            var scKey = (sourceName, categoryName);
+            if (!sourceCategoryTotals.TryGetValue(scKey, out var scTotals))
+            {
+                scTotals = scope.NewTotals();
+                sourceCategoryTotals[scKey] = scTotals;
+            }
+            scTotals.Add(amount, currency, date);
+
+            var ceKey = (categoryName, description);
+            if (!categoryExpenseTotals.TryGetValue(ceKey, out var ceTotals))
+            {
+                ceTotals = scope.NewTotals();
+                categoryExpenseTotals[ceKey] = ceTotals;
+            }
+            ceTotals.Add(amount, currency, date);
+
             categoryColors[categoryName] = categoryColor;
             sources.Add(sourceName);
             categories.Add(categoryName);
-            expenseKeys.Add((categoryName, description));
         }
 
         const string otherSource = "Other";
@@ -238,7 +299,7 @@ public sealed class ExpenseStatisticsService(
             orderedSources.Add(otherSource);
 
         var orderedCategories = categories.OrderBy(c => c).ToList();
-        var orderedExpenses = expenseKeys
+        var orderedExpenses = categoryExpenseTotals.Keys
             .OrderBy(e => e.Category)
             .ThenBy(e => e.Description)
             .ToList();
@@ -264,28 +325,24 @@ public sealed class ExpenseStatisticsService(
             nodes.Add(new ExpenseFlowNode { Name = desc, Kind = "expense", Color = categoryColors[cat] });
         }
 
-        var sourceCategoryLinks = tripleTotals
-            .GroupBy(kv => (kv.Key.Source, kv.Key.Category))
-            .Select(g => new ExpenseFlowLink
-            {
-                Source = sourceIdx[g.Key.Source],
-                Target = categoryIdx[g.Key.Category],
-                Value = g.Sum(x => x.Value)
-            });
+        var sourceCategoryLinks = sourceCategoryTotals.Select(kv => new ExpenseFlowLink
+        {
+            Source = sourceIdx[kv.Key.Source],
+            Target = categoryIdx[kv.Key.Category],
+            Value = kv.Value.ToDictionary()
+        });
 
-        var categoryExpenseLinks = tripleTotals
-            .GroupBy(kv => (kv.Key.Category, kv.Key.Description))
-            .Select(g => new ExpenseFlowLink
-            {
-                Source = categoryIdx[g.Key.Category],
-                Target = expenseIdx[(g.Key.Category, g.Key.Description)],
-                Value = g.Sum(x => x.Value)
-            });
+        var categoryExpenseLinks = categoryExpenseTotals.Select(kv => new ExpenseFlowLink
+        {
+            Source = categoryIdx[kv.Key.Category],
+            Target = expenseIdx[kv.Key],
+            Value = kv.Value.ToDictionary()
+        });
 
         var links = sourceCategoryLinks
             .Concat(categoryExpenseLinks)
-            .Where(l => l.Value > 0)
-            .OrderByDescending(l => l.Value)
+            .Where(l => l.Value.GetValueOrDefault(scope.PrimaryCurrency) > 0)
+            .OrderByDescending(l => l.Value.GetValueOrDefault(scope.PrimaryCurrency))
             .ToList();
 
         return new ExpenseFlow { Nodes = nodes, Links = links };
@@ -308,10 +365,14 @@ public sealed class ExpenseStatisticsService(
         var currentMonth = SumExpandedAmounts(seriesList, currentMonthStart, currentMonthEnd, scope);
         var previousMonth = SumExpandedAmounts(seriesList, previousMonthStart, previousMonthEnd, scope);
 
-        var variation = currentMonth - previousMonth;
-        var variationPctg = previousMonth != 0
-            ? (currentMonth - previousMonth) / previousMonth * 100
-            : 0;
+        var variation = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => currentMonth[c] - previousMonth[c]);
+        var variationPctg = scope.DisplayCurrencies.ToDictionary(
+            c => c,
+            c => previousMonth[c] != 0
+                ? (currentMonth[c] - previousMonth[c]) / previousMonth[c] * 100
+                : 0m);
 
         return new MonthToMonthStats
         {
@@ -337,10 +398,10 @@ public sealed class ExpenseStatisticsService(
         return (seriesList, previousYearStart, currentYearStart, currentYearEnd);
     }
 
-    private static Dictionary<int, decimal> GetMonthlyAmounts(
+    private static Dictionary<int, IReadOnlyDictionary<string, decimal>> GetMonthlyAmounts(
         IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
-        var monthly = new Dictionary<int, decimal>();
+        var monthly = new Dictionary<int, CurrencyTotals>();
         foreach (var series in seriesList)
         {
             foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
@@ -348,30 +409,37 @@ public sealed class ExpenseStatisticsService(
                 var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
                 var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
                 var month = occurrence.Date.Month;
-                monthly[month] = monthly.GetValueOrDefault(month) + scope.ConvertToPrimary(amount, currency, occurrence.Date);
+                if (!monthly.TryGetValue(month, out var totals))
+                {
+                    totals = scope.NewTotals();
+                    monthly[month] = totals;
+                }
+                totals.Add(amount, currency, occurrence.Date);
             }
         }
-        return monthly;
+        return monthly.ToDictionary(
+            kv => kv.Key,
+            kv => (IReadOnlyDictionary<string, decimal>)kv.Value.ToDictionary());
     }
 
-    private static decimal SumExpandedAmounts(
+    private static IReadOnlyDictionary<string, decimal> SumExpandedAmounts(
         IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
     {
-        decimal total = 0;
+        var totals = scope.NewTotals();
         foreach (var series in seriesList)
         {
             foreach (var occurrence in ExpenseSeriesExpander.Expand(series, startDate, endDate))
             {
                 var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
                 var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
-                total += scope.ConvertToPrimary(amount, currency, occurrence.Date);
+                totals.Add(amount, currency, occurrence.Date);
             }
         }
-        return total;
+        return totals.ToDictionary();
     }
 
-    private static IEnumerable<(DateOnly Date, decimal Amount, string CategoryName, string CategoryColor)>
-        ExpandWithCategory(IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+    private static IEnumerable<(DateOnly Date, decimal Amount, string Currency, string CategoryName, string CategoryColor)>
+        ExpandWithCategory(IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate)
     {
         const string uncategorizedName = "Uncategorized";
         const string uncategorizedColor = "#6b7280";
@@ -385,13 +453,13 @@ public sealed class ExpenseStatisticsService(
             {
                 var amount = occurrence.Exception?.Amount ?? occurrence.Segment!.Amount;
                 var currency = occurrence.Exception?.Currency ?? occurrence.Segment!.Currency;
-                yield return (occurrence.Date, scope.ConvertToPrimary(amount, currency, occurrence.Date), categoryName, categoryColor);
+                yield return (occurrence.Date, amount, currency, categoryName, categoryColor);
             }
         }
     }
 
-    private static IEnumerable<(DateOnly Date, decimal Amount, string SourceName, string CategoryName, string CategoryColor, string Description)>
-        ExpandWithSourceCategoryAndDescription(IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate, CurrencyScope scope)
+    private static IEnumerable<(DateOnly Date, decimal Amount, string Currency, string SourceName, string CategoryName, string CategoryColor, string Description)>
+        ExpandWithSourceCategoryAndDescription(IReadOnlyList<ExpenseSeries> seriesList, DateOnly startDate, DateOnly endDate)
     {
         const string uncategorizedName = "Uncategorized";
         const string uncategorizedColor = "#6b7280";
@@ -412,7 +480,8 @@ public sealed class ExpenseStatisticsService(
 
                 yield return (
                     occurrence.Date,
-                    scope.ConvertToPrimary(amount, currency, occurrence.Date),
+                    amount,
+                    currency,
                     source,
                     categoryName,
                     categoryColor,

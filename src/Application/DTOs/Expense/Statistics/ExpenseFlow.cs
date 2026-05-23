@@ -17,5 +17,5 @@ public class ExpenseFlowLink
 {
     public int Source { get; set; }
     public int Target { get; set; }
-    public decimal Value { get; set; }
+    public required IReadOnlyDictionary<string, decimal> Value { get; set; }
 }

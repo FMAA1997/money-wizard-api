@@ -66,7 +66,7 @@ public class InvoiceStatisticsServiceTests
             _categoryRepositoryMock.Object,
             _registryMock.Object,
             _currentUserProviderMock.Object,
-            TestCurrencyConverter.Create());
+            TestCurrencyConverter.Create(displayCurrencies: new[] { "ARS" }, primaryCurrency: "ARS"));
     }
 
     [Fact]
@@ -82,8 +82,8 @@ public class InvoiceStatisticsServiceTests
         var result = await _sut.GetCategoryProgress();
 
         result.IsError.Should().BeFalse();
-        result.Value.InvoicedAmount.Should().Be(800m);
-        result.Value.ProjectedAmount.Should().Be(800m);
+        result.Value.InvoicedAmount["ARS"].Should().Be(800m);
+        result.Value.ProjectedAmount["ARS"].Should().Be(800m);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class InvoiceStatisticsServiceTests
         var result = await _sut.GetCategoryProgress();
 
         result.IsError.Should().BeFalse();
-        result.Value.InvoicedAmount.Should().Be(1150m);
+        result.Value.InvoicedAmount["ARS"].Should().Be(1150m);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class InvoiceStatisticsServiceTests
         var result = await _sut.GetCategoryProgress();
 
         result.IsError.Should().BeFalse();
-        result.Value.ProjectedAmount.Should().Be(700m);
+        result.Value.ProjectedAmount["ARS"].Should().Be(700m);
     }
 
     private static InvoiceSeries BuildOneOff(InvoiceType type, decimal amount, DateOnly date)

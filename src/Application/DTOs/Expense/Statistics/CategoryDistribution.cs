@@ -8,6 +8,6 @@ public class CategoryDistribution
 public class CategoryDistributionEntry
 {
     public required string Name { get; set; }
-    public decimal Value { get; set; }
+    public required IReadOnlyDictionary<string, decimal> Value { get; set; }
     public required string Fill { get; set; }
 }

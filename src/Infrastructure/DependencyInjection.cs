@@ -40,17 +40,17 @@ public static class DependencyInjection
         services.AddHttpClientTo<IData912Client, Data912Client>("Data912");
         services.AddHttpClientTo<ICoinGeckoClient, CoinGeckoClient>("CoinGecko");
         services.AddHttpClientTo<IFinnhubClient, FinnhubClient>("Finnhub");
-        services.AddHttpClientTo<ICafciClient, CafciClient>("Cafci");
 
         services.AddSingleton<IExchangeRateCache, ExchangeRateCache>();
         services.AddSingleton<Data912SnapshotCache>();
+        services.AddSingleton<ArgentinaDatosFciSnapshotCache>();
 
         services.AddSingleton<IPriceProvider, FinnhubUsStocksProvider>();
         services.AddSingleton<IPriceProvider, FinnhubEtfProvider>();
         services.AddSingleton<IPriceProvider, Data912CedearsProvider>();
         services.AddSingleton<IPriceProvider, Data912ArgBondsProvider>();
         services.AddSingleton<IPriceProvider, CoinGeckoCryptoProvider>();
-        services.AddSingleton<IPriceProvider, CafciFciProvider>();
+        services.AddSingleton<IPriceProvider, ArgentinaDatosFciProvider>();
         services.AddSingleton<IPriceProvider, CashPriceProvider>();
         services.AddSingleton<IPriceProviderRegistry, PriceProviderRegistry>();
 
